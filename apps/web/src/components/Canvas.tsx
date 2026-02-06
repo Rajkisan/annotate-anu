@@ -44,7 +44,7 @@ interface StaticRectAnnotationProps {
   fillOpacity: number
   selectedFillOpacity: number
   onRegisterRef: (id: string, node: Konva.Node | null) => void
-  onClick: (id: string) => void
+  onClick: (id: string, e?: any) => void
   onMouseEnter?: (annotation: Annotation, e: any) => void
   onMouseLeave?: () => void
   onContextMenu?: (annotation: Annotation, e: any) => void
@@ -94,8 +94,8 @@ const StaticRectAnnotation = React.memo(function StaticRectAnnotation({
         perfectDrawEnabled={false}
         listening={true}
         hitStrokeWidth={10}
-        onClick={() => onClick(annotation.id)}
-        onTap={() => onClick(annotation.id)}
+        onClick={(e) => onClick(annotation.id, e)}
+        onTap={(e) => onClick(annotation.id, e)}
         onMouseEnter={onMouseEnter ? (e) => onMouseEnter(annotation, e) : undefined}
         onMouseLeave={onMouseLeave}
         onContextMenu={onContextMenu ? (e) => onContextMenu(annotation, e) : undefined}
@@ -129,7 +129,7 @@ interface StaticPolygonAnnotationProps {
   fillOpacity: number
   selectedFillOpacity: number
   onRegisterRef: (id: string, node: Konva.Node | null) => void
-  onClick: (id: string) => void
+  onClick: (id: string, e?: any) => void
   onMouseEnter?: (annotation: Annotation, e: any) => void
   onMouseLeave?: () => void
   onContextMenu?: (annotation: Annotation, e: any) => void
@@ -180,8 +180,8 @@ const StaticPolygonAnnotation = React.memo(function StaticPolygonAnnotation({
         perfectDrawEnabled={false}
         listening={true}
         hitStrokeWidth={10}
-        onClick={() => onClick(annotation.id)}
-        onTap={() => onClick(annotation.id)}
+        onClick={(e) => onClick(annotation.id, e)}
+        onTap={(e) => onClick(annotation.id, e)}
         onMouseEnter={onMouseEnter ? (e) => onMouseEnter(annotation, e) : undefined}
         onMouseLeave={onMouseLeave}
         onContextMenu={onContextMenu ? (e) => onContextMenu(annotation, e) : undefined}
@@ -1508,11 +1508,18 @@ const Canvas = React.memo(function Canvas({
       }
     }
 
+    const handleWindowBlur = () => {
+      setIsShiftPressed(false)
+      setIsCtrlPressed(false)
+    }
+
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleWindowBlur)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleWindowBlur)
     }
   }, [selectedTool, isPanMode, selectedIds, annotations, copiedAnnotation, onAddAnnotation])
 
@@ -1544,8 +1551,9 @@ const Canvas = React.memo(function Canvas({
     })
   }, [onSelectAnnotations])
 
-  const handleAnnotationClick = useCallback((annotationId: string) => {
-    if (isShiftPressed) {
+  const handleAnnotationClick = useCallback((annotationId: string, e?: any) => {
+    const shiftHeld = e?.evt?.shiftKey ?? isShiftPressed
+    if (shiftHeld) {
       // Shift+Click: Toggle annotation in selection
       if (selectedIds.includes(annotationId)) {
         commitSelection(selectedIds.filter(id => id !== annotationId))
@@ -2602,8 +2610,8 @@ const Canvas = React.memo(function Canvas({
                     perfectDrawEnabled={false}
                     hitStrokeWidth={0}
                     listening={true}
-                    onClick={() => handleAnnotationClick(annotation.id)}
-                    onTap={() => handleAnnotationClick(annotation.id)}
+                    onClick={(e) => handleAnnotationClick(annotation.id, e)}
+                    onTap={(e) => handleAnnotationClick(annotation.id, e)}
                     draggable={selectedTool === 'select' && isSelected}
                     onDragStart={(e) => handleDragStart(annotation, e)}
                     onDragMove={(e) => handleDragMove(annotation, e)}
@@ -2678,10 +2686,10 @@ const Canvas = React.memo(function Canvas({
                       if (isCtrlPressed && isSelected) {
                         handlePolygonLineClick(poly, e)
                       } else {
-                        handleAnnotationClick(annotation.id)
+                        handleAnnotationClick(annotation.id, e)
                       }
                     }}
-                    onTap={() => handleAnnotationClick(annotation.id)}
+                    onTap={(e) => handleAnnotationClick(annotation.id, e)}
                     onMouseEnter={hoverEnabled ? (e) => handleAnnotationMouseEnter(annotation, e) : undefined}
                     onMouseLeave={hoverEnabled ? handleAnnotationMouseLeave : undefined}
                     onContextMenu={(e) => handleAnnotationContextMenu(annotation, e)}
