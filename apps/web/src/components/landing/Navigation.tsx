@@ -1,15 +1,9 @@
 import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { markAsVisited } from '../../lib/navigation'
+import { Link } from '@tanstack/react-router'
 
 function Navigation() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-
-  const handleLaunchApp = () => {
-    markAsVisited()
-    setIsMobileMenuOpen(false)
-  }
 
   const closeMobileMenu = () => {
     setIsMobileMenuOpen(false)
@@ -37,9 +31,6 @@ function Navigation() {
           <a href="#features" className="text-gray-600 hover:text-emerald-600 transition-colors">
             Features
           </a>
-          <a href="#how-it-works" className="text-gray-600 hover:text-emerald-600 transition-colors">
-            How It Works
-          </a>
           <a
             href="https://github.com/agfianf/annotate-anu.git"
             target="_blank"
@@ -49,15 +40,6 @@ function Navigation() {
             GitHub
           </a>
         </div>
-
-        {/* Desktop CTA */}
-        <Link
-          to="/app"
-          onClick={handleLaunchApp}
-          className="hidden md:inline-block px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors"
-        >
-          Launch App
-        </Link>
 
         {/* Mobile Hamburger Button */}
         <button
@@ -81,13 +63,6 @@ function Navigation() {
               Features
             </a>
             <a
-              href="#how-it-works"
-              onClick={closeMobileMenu}
-              className="text-gray-700 hover:text-emerald-600 transition-colors py-2"
-            >
-              How It Works
-            </a>
-            <a
               href="https://github.com/agfianf/annotate-anu.git"
               target="_blank"
               rel="noopener noreferrer"
@@ -96,13 +71,7 @@ function Navigation() {
             >
               GitHub
             </a>
-            <Link
-              to="/app"
-              onClick={handleLaunchApp}
-              className="mt-2 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors text-center"
-            >
-              Launch App
-            </Link>
+
           </div>
         </div>
       )}

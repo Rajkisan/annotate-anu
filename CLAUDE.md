@@ -4,204 +4,646 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Annotate ANU - A full-stack image annotation application combining SAM3 (Segment Anything Model 3) AI-powered segmentation with an interactive React-based annotation interface. The application enables both manual and AI-assisted image labeling for computer vision datasets.
+**Annotate ANU** - A full-stack image annotation application combining SAM3 (Segment Anything Model 3) AI-powered segmentation with an interactive React-based annotation interface.
 
-## Architecture
+**Tech Stack**:
+- **Backend**: FastAPI (Python 3.12), SQLAlchemy, Alembic, PostgreSQL, Redis
+- **Frontend**: React 18, TypeScript, Vite, TailwindCSS, Konva, **TanStack Router** (IMPORTANT: Code-based routing)
+- **ML**: HuggingFace Transformers (SAM3), CUDA support
+- **Infrastructure**: Docker Compose, Traefik, Celery
 
-### Project Structure
-Simple monorepo structure with two independent applications:
-- **Backend**: FastAPI service providing SAM3 inference API (`/apps/api-inference`)
-- **Frontend**: React + TypeScript annotation interface (`/apps/web`)
-- **Docker Compose**: Orchestrates both services with shared networking
+**Deployment Modes**:
+- **Development** (`docker-compose.dev.yml`): Hot-reload enabled for local development
+- **Solo** (`docker-compose.solo.yml`): Local-first with IndexedDB storage
+- **Team** (`docker-compose.team.yml`): Full collaborative stack with PostgreSQL, MinIO, Redis
 
-Each app manages its own dependencies and can be run independently or via Docker.
+## Project Structure
 
-### Backend (`/apps/api-inference`)
-**Framework**: FastAPI with Python 3.12
+```
+sam3-app/
+├── apps/
+│   ├── api-inference/              # SAM3 Inference API (Port 8000)
+│   │   ├── src/
+│   │   │   ├── app/
+│   │   │   │   ├── main.py                    # FastAPI entry point
+│   │   │   │   ├── config.py                  # Environment configuration
+│   │   │   │   ├── integrations/sam3/         # SAM3 model integration
+│   │   │   │   │   ├── inference.py           # Core inference logic
+│   │   │   │   │   ├── mask_utils.py          # Mask-to-polygon conversion
+│   │   │   │   │   └── visualizer.py          # Visualization utilities
+│   │   │   │   ├── routers/                   # API endpoints
+│   │   │   │   │   └── sam3.py                # SAM3 routes
+│   │   │   │   ├── schemas/                   # Pydantic models
+│   │   │   │   │   └── sam3.py                # Request/response schemas
+│   │   │   │   ├── services/                  # Business logic
+│   │   │   │   ├── middleware/                # Custom middleware
+│   │   │   │   ├── helpers/                   # Utilities
+│   │   │   │   └── exceptions/                # Exception handling
+│   │   │   └── tests/                         # Pytest tests
+│   │   ├── pyproject.toml                     # Python dependencies (uv)
+│   │   ├── .env.example
+│   │   └── Dockerfile
+│   │
+│   ├── api-core/                   # Core API (Port 8001)
+│   │   ├── src/
+│   │   │   ├── app/
+│   │   │   │   ├── main.py                    # FastAPI entry point
+│   │   │   │   ├── config.py                  # Environment configuration
+│   │   │   │   ├── core/                      # Database, security
+│   │   │   │   │   ├── database.py            # Database connection
+│   │   │   │   │   └── security.py            # JWT, auth utilities
+│   │   │   │   ├── models/                    # SQLAlchemy models
+│   │   │   │   │   ├── user.py
+│   │   │   │   │   ├── project.py
+│   │   │   │   │   ├── task.py
+│   │   │   │   │   ├── job.py
+│   │   │   │   │   └── model.py               # BYOM models
+│   │   │   │   ├── repositories/              # Database access layer
+│   │   │   │   ├── services/                  # Business logic
+│   │   │   │   ├── routers/                   # API endpoints
+│   │   │   │   │   ├── auth.py
+│   │   │   │   │   ├── projects.py
+│   │   │   │   │   ├── tasks.py
+│   │   │   │   │   ├── jobs.py
+│   │   │   │   │   └── models.py              # BYOM routes
+│   │   │   │   ├── schemas/                   # Pydantic models
+│   │   │   │   ├── integrations/              # External integrations
+│   │   │   │   ├── dependencies/              # FastAPI dependencies
+│   │   │   │   └── exceptions/                # Exception handling
+│   │   │   └── migrations/                    # Alembic migrations
+│   │   ├── pyproject.toml                     # Python dependencies (uv)
+│   │   ├── .env.example
+│   │   └── Dockerfile
+│   │
+│   └── web/                        # Frontend (Port 5173/3000)
+│       ├── src/
+│       │   ├── routes/                        # TanStack Router configuration (IMPORTANT)
+│       │   │   └── __root.tsx                 # Route tree definition (code-based routing)
+│       │   ├── pages/                         # React page components
+│       │   │   ├── LandingPage.tsx
+│       │   │   ├── DashboardPage.tsx
+│       │   │   ├── ProjectsPage.tsx
+│       │   │   ├── ProjectDetailPage.tsx
+│       │   │   ├── TasksPage.tsx
+│       │   │   ├── JobsPage.tsx
+│       │   │   ├── AnimationDemoPage.tsx      # Animation system demo (/animations)
+│       │   │   ├── AnnotationApp.tsx          # Main annotation interface
+│       │   │   ├── ModelConfigPage.tsx
+│       │   │   └── ProfilePage.tsx
+│       │   ├── components/                    # React components
+│       │   │   ├── Canvas.tsx                 # Konva annotation canvas
+│       │   │   ├── LeftSidebar.tsx            # Tool selection
+│       │   │   ├── Sidebar.tsx                # Annotations list
+│       │   │   ├── BboxPromptPanel.tsx        # SAM3 bbox prompts
+│       │   │   ├── TextPromptPanel.tsx        # SAM3 text prompts
+│       │   │   ├── AutoDetectPanel.tsx
+│       │   │   ├── DashboardLayout.tsx
+│       │   │   ├── ProjectTabs.tsx
+│       │   │   ├── CreateTaskWizard.tsx
+│       │   │   ├── ExportModal.tsx
+│       │   │   └── ui/                        # Reusable UI components
+│       │   │       └── animate/               # Framer Motion animation primitives
+│       │   ├── lib/                           # Utility libraries
+│       │   │   ├── api-client.ts              # Core API client
+│       │   │   ├── sam3-client.ts             # SAM3 API client
+│       │   │   ├── byom-client.ts             # BYOM client
+│       │   │   ├── inference-client.ts        # Generic inference
+│       │   │   ├── storage.ts                 # IndexedDB layer
+│       │   │   ├── motion-config.ts           # Animation presets + reduced-motion helpers
+│       │   │   ├── animation-utils.ts         # Animation helpers
+│       │   │   ├── coco-export.ts
+│       │   │   ├── yolo-export.ts
+│       │   │   └── utils.ts
+│       │   ├── hooks/                         # React hooks
+│       │   │   ├── useStorage.ts              # IndexedDB state
+│       │   │   ├── useHistory.ts              # Undo/redo
+│       │   │   ├── useKeyboardShortcuts.ts
+│       │   │   ├── useModelRegistry.ts
+│       │   │   └── useReducedMotion.ts        # prefers-reduced-motion hook
+│       │   ├── contexts/                      # React contexts
+│       │   │   └── AuthContext.tsx
+│       │   ├── types/                         # TypeScript types
+│       │   │   └── annotations.ts
+│       │   └── main.tsx                       # App entry point
+│       ├── package.json                       # NPM dependencies
+│       ├── .env.example
+│       ├── vite.config.ts
+│       └── Dockerfile
+│
+├── docker/                         # Docker configurations
+│   ├── docker-compose.dev.yml                 # Development mode
+│   ├── docker-compose.solo.yml                # Solo mode
+│   └── docker-compose.team.yml                # Team mode
+│
+├── tools/                          # CLI tools and scripts
+├── docs/                           # Additional documentation
+├── Makefile                        # Development commands
+└── CLAUDE.md                       # This file
+```
 
-*Note: All paths below are relative to `apps/api-inference/`*
+### Key Architecture Points
 
-**Key Components**:
-- `src/app/main.py` - FastAPI application entry point with lifespan management for model loading
-- `src/app/config.py` - Pydantic settings with environment variable support
-- `src/app/integrations/sam3/` - SAM3 model integration layer
-  - `inference.py` - Core SAM3 inference logic (text prompts, bounding boxes, batch processing)
-  - `mask_utils.py` - Mask-to-polygon conversion utilities
-  - `visualizer.py` - Mask and bounding box visualization
-- `src/app/routers/sam3.py` - API endpoints for SAM3 inference
-- `src/app/schemas/sam3.py` - Pydantic request/response models
-- `src/app/helpers/` - Response formatting and logging utilities
+**Backend API - SAM3 Inference** (`/apps/api-inference`):
+- FastAPI service for SAM3 AI-powered segmentation
+- Model loaded via lifespan context manager (requires HF_TOKEN)
+- Supports text prompts, bbox prompts, batch processing
+- Auto-detects CUDA/CPU via `SAM3_DEVICE=auto`
+- Port: 8000
 
-**Model Loading**: SAM3 model is loaded during FastAPI application startup via lifespan context manager. This ensures the model is loaded once and cached in memory. The model requires HuggingFace authentication (HF_TOKEN) as SAM3 is a gated model.
+**Backend API - Core** (`/apps/api-core`):
+- FastAPI + SQLAlchemy + Alembic
+- User authentication (JWT), project/task management
+- BYOM (Bring Your Own Model) registry and health checking
+- PostgreSQL (Team) or SQLite (Dev/Solo)
+- Port: 8001
 
-**Device Management**: Automatically detects CUDA/CPU via `SAM3_DEVICE=auto` setting. GPU acceleration is configured in docker-compose.yml with nvidia-docker support.
+**Frontend** (`/apps/web`):
+- React 18 + TypeScript + Vite + TailwindCSS
+- **TanStack Router** with code-based routing (`src/routes/__root.tsx`) - IMPORTANT
+- Konva-based annotation canvas (rectangles, polygons, points)
+- IndexedDB persistence (Solo) or hybrid IndexedDB + API (Team)
+- Ports: 5173 (dev), 3000 (solo), 80 (team via Traefik)
 
-### Frontend (`/apps/web`)
-**Framework**: React 18 + TypeScript + Vite
+## Docker Development Commands
 
-*Note: All paths below are relative to `apps/web/`*
+### Essential Commands
 
-**Key Components**:
-- `src/App.tsx` - Main application orchestrating state and UI components
-- `src/components/Canvas.tsx` - Konva-based annotation canvas
-- `src/components/LeftSidebar.tsx` - Tool selection and image management
-- `src/components/Sidebar.tsx` - Annotations list and label management
-- `src/components/BboxPromptPanel.tsx` - SAM3 bounding box prompt interface
-- `src/components/TextPromptPanel.tsx` - SAM3 text prompt interface
-- `src/lib/sam3-client.ts` - SAM3 API client
-- `src/lib/storage.ts` - IndexedDB persistence layer
-- `src/types/annotations.ts` - TypeScript type definitions
+```bash
+# Quick reference
+make help                           # View all available commands
 
-**State Management**: Uses React hooks with IndexedDB persistence. The `useStorage` hook manages images, annotations, and labels with automatic persistence.
+# Main workflow
+make docker-up                      # Start all services (RECOMMENDED)
+make docker-down                    # Stop all services
+make docker-rebuild                 # Rebuild images, stop, and restart (full reset)
 
-**Canvas System**: Built with Konva/React-Konva for vector-based annotations. Supports rectangles, polygons, and points with real-time editing.
+# View logs
+make docker-logs                    # View all service logs
+make docker-logs service=backend    # View SAM3 backend logs only
+make docker-logs service=api-core   # View Core API logs only
+make docker-logs service=frontend   # View frontend logs only
 
-**Prompt Modes**:
-- `single` - Manual bounding box drawing, single SAM3 inference
-- `auto-apply` - Automatic SAM3 inference after drawing each bounding box
-- `batch` - Multiple bounding boxes, single batch SAM3 inference
+# Service management
+make docker-restart service=backend     # Restart specific service
+make docker-restart service=api-core    # Restart Core API
+make docker-restart service=frontend    # Restart frontend
 
-## Development Commands
+# Shell access
+make docker-shell service=backend   # Shell into backend container
+make docker-shell service=api-core  # Shell into Core API container
 
-### Local Development (Recommended)
+# Build commands
+make docker-build                   # Rebuild all Docker images
 
-**Backend**:
+# Frontend troubleshooting
+make frontend-clear-cache           # Clear Vite cache + restart frontend container
+```
+
+### Detailed Docker Commands
+
+**Starting Services**:
+```bash
+# Start all services in development mode (hot-reload enabled)
+make docker-up
+
+# This runs: docker-compose -f docker/docker-compose.dev.yml up -d
+# Services started:
+# - backend (SAM3 Inference): http://localhost:8000
+# - api-core (Core API): http://localhost:8001
+# - frontend (React): http://localhost:5173
+# - redis: localhost:6379
+```
+
+**Stopping Services**:
+```bash
+# Stop all services
+make docker-down
+
+# Stop and remove volumes (WARNING: deletes all data)
+docker-compose -f docker/docker-compose.dev.yml down -v
+```
+
+**Viewing Logs**:
+```bash
+# All services
+make docker-logs
+
+# Specific service (follow mode)
+make docker-logs service=backend
+make docker-logs service=api-core
+make docker-logs service=frontend
+
+# Last 100 lines
+docker logs --tail 100 sam3-backend
+
+# Follow logs in real-time
+docker logs -f sam3-backend
+```
+
+**Restarting Services**:
+```bash
+# Restart specific service (useful after code changes)
+make docker-restart service=backend
+make docker-restart service=api-core
+make docker-restart service=frontend
+
+# Restart all services
+make docker-down && make docker-up
+```
+
+**Shell Access**:
+```bash
+# Access backend container shell
+make docker-shell service=backend
+# Once inside: python, pytest, etc.
+
+# Access Core API container shell
+make docker-shell service=api-core
+# Once inside: alembic upgrade head, python, etc.
+
+# Run one-off commands
+docker exec -it sam3-backend python -c "from transformers import Sam3Model; print('OK')"
+```
+
+**Building Images**:
+```bash
+# Rebuild all images (use after Dockerfile changes)
+make docker-build
+
+# Rebuild and restart everything (RECOMMENDED for full reset)
+make docker-rebuild
+
+# Build specific service
+docker-compose -f docker/docker-compose.dev.yml build backend
+docker-compose -f docker/docker-compose.dev.yml build api-core
+docker-compose -f docker/docker-compose.dev.yml build frontend
+```
+
+**Inspecting Services**:
+```bash
+# List running containers
+docker ps
+
+# Inspect specific container
+docker inspect sam3-backend
+docker inspect sam3-api-core
+docker inspect sam3-frontend
+
+# Check service health
+docker-compose -f docker/docker-compose.dev.yml ps
+
+# View resource usage
+docker stats
+```
+
+**Database Migrations (Team Mode)**:
+```bash
+# Shell into api-core
+make docker-shell service=api-core
+
+# Inside container
+cd src
+alembic revision --autogenerate -m "description"  # Create migration
+alembic upgrade head                              # Apply migrations
+alembic downgrade -1                              # Rollback one version
+alembic current                                   # Show current version
+alembic history                                   # Show migration history
+```
+
+**Troubleshooting**:
+```bash
+# Check if containers are running
+docker ps -a
+
+# View container logs for errors
+make docker-logs service=backend
+
+# Remove all containers and start fresh
+make docker-down
+docker system prune -a  # WARNING: removes all unused containers/images
+make docker-up
+
+# Check disk space
+docker system df
+
+# Clean up unused resources
+docker system prune
+```
+
+### Local Development (Alternative)
+
+If you prefer running services locally without Docker:
+
+**Backend (SAM3 Inference)**:
 ```bash
 cd apps/api-inference
-cp .env.example .env  # IMPORTANT: Add your HF_TOKEN
-make backend-install  # Install dependencies with uv (run from root)
-make backend-run      # Run API at http://localhost:8000 (run from root)
+cp .env.example .env              # Add your HF_TOKEN
+make backend-install              # Run from repo root
+make backend-run                  # Run from repo root (http://localhost:8000)
+```
+
+**Backend (API Core)**:
+```bash
+cd apps/api-core
+cp .env.example .env              # Configure database
+make core-install                 # Run from repo root
+make core-run                     # Run from repo root (http://localhost:8001)
 ```
 
 **Frontend**:
 ```bash
 cd apps/web
 npm install
-npm run dev  # Start dev server at http://localhost:5173
+npm run dev                       # http://localhost:5173
 ```
 
-### Docker Development
-
+**Install All Dependencies**:
 ```bash
-make docker-up          # Start all services
-make docker-down        # Stop all services
-make docker-logs        # View all logs
-make docker-logs service=backend   # View backend logs only
-make docker-restart service=backend  # Restart backend
-make docker-shell service=backend    # Shell into backend container
-```
-
-### Code Quality
-
-**Backend**:
-```bash
-make backend-format  # Format with ruff
-make backend-lint    # Lint with ruff
-make backend-test    # Run pytest (when tests exist)
-```
-
-**Frontend**:
-```bash
-npm run lint   # ESLint
-npm run build  # TypeScript compilation + Vite build
+make install                      # Install all backend + frontend dependencies
 ```
 
 ## Critical Configuration
 
 ### HuggingFace Token (REQUIRED)
+
 SAM3 is a **gated model**. You MUST:
+
 1. Request access: https://huggingface.co/facebook/sam3
 2. Generate token: https://huggingface.co/settings/tokens
 3. Add to `apps/api-inference/.env`:
+
 ```bash
 HF_TOKEN=hf_your_token_here
 ```
 
-Without this token, the backend will fail to load the model during startup.
+**Without this token, the backend will fail to load the model.**
 
 ### Environment Files
-- `apps/api-inference/.env` - Backend configuration (HF_TOKEN, SAM3_DEVICE, MAX_IMAGE_SIZE_MB, etc.)
-- `apps/web/.env` - Frontend configuration (VITE_API_URL)
 
-## API Endpoints
+**`apps/api-inference/.env`** - SAM3 Backend:
+```bash
+HF_TOKEN=hf_your_token_here       # REQUIRED for SAM3
+SAM3_DEVICE=auto                  # auto, cuda, cpu
+MAX_IMAGE_SIZE_MB=10
+MODE=dev                          # dev, solo, team
+```
 
-**Base URL**: `http://localhost:8000`
+**`apps/api-core/.env`** - Core API:
+```bash
+DATABASE_URL=postgresql://...     # PostgreSQL connection
+JWT_SECRET=your_secret_key
+REDIS_URL=redis://localhost:6379
+MODE=dev                          # dev, solo, team
+```
 
-- `POST /api/v1/sam3/inference/text` - Text prompt segmentation
-- `POST /api/v1/sam3/inference/bbox` - Bounding box segmentation
-- `POST /api/v1/sam3/inference/batch` - Batch processing
-- `GET /api/v1/sam3/health` - Health check
-- `GET /docs` - Swagger UI
-- `GET /redoc` - ReDoc documentation
+**`apps/web/.env`** - Frontend:
+```bash
+VITE_API_URL=http://localhost:8000
+VITE_API_CORE_URL=http://localhost:8001
+VITE_MODE=dev                     # dev, solo, team
+VITE_STORAGE=indexeddb            # indexeddb, hybrid
+```
 
-## Data Flow
+### Deployment Modes
 
-1. **Image Upload**: User uploads images → stored in IndexedDB → displayed in frontend
-2. **Manual Annotation**: User draws shapes on canvas → stored as annotations in IndexedDB
-3. **AI-Assisted Annotation (Bbox)**: User draws bounding box → sent to SAM3 API → receives polygon masks → converted to polygon annotations
-4. **AI-Assisted Annotation (Text)**: User enters text prompt → sent to SAM3 API → receives polygon masks → converted to polygon annotations
-5. **Export**: Annotations exported as COCO JSON, YOLO format, or ZIP archive
+Set `MODE` environment variable:
+- `dev` / `solo` - Local-first mode (IndexedDB only, no auth)
+- `team` - Full collaborative mode (PostgreSQL, MinIO, Redis, auth enabled)
 
-## Key Technical Details
+## Code Quality & Testing
 
-### SAM3 Integration
-- Backend uses HuggingFace Transformers `Sam3Model` and `Sam3Processor`
-- Masks are converted from binary arrays to polygon coordinates for frontend rendering
-- Supports both text prompts ("cat", "person") and bounding box prompts (coordinate arrays)
-- Batch processing for multiple images to improve performance
+**Backend (SAM3 Inference)**:
+```bash
+make backend-format               # Format with ruff
+make backend-lint                 # Lint with ruff
+make backend-test                 # Run pytest
+```
 
-### Storage Strategy
-- **Frontend**: IndexedDB for images (blobs) and annotations (JSON)
-- **Backend**: Stateless - no persistent storage, model cached in HuggingFace cache dir
-- Docker volume `huggingface_cache` persists downloaded models across container restarts
+**Backend (API Core)**:
+```bash
+make core-format                  # Format with ruff
+make core-lint                    # Lint with ruff
+make core-test                    # Run pytest
+```
 
-### Canvas Coordinate System
-- Annotations stored in absolute pixel coordinates relative to original image dimensions
-- Canvas scales images to fit viewport while maintaining aspect ratio
-- Coordinates must be transformed between canvas space and image space during rendering and editing
+**Frontend**:
+```bash
+cd apps/web
+npm run lint                      # ESLint
+npm run build                     # TypeScript compilation + Vite build
+```
 
-### GPU Acceleration
-- Enabled by default in `docker-compose.yml` (lines 23-29)
-- Requires nvidia-docker installation
-- Performance: ~200-500ms per image with GPU vs 5-10x slower on CPU
+**Clean Build Artifacts**:
+```bash
+make clean                        # Clean all cache and build files
+```
 
-## Common Tasks
+## Common Development Tasks
+
+### Using Color Picker Component
+
+**IMPORTANT**: Always use the existing `ColorPickerPopup` component for all color selection needs.
+
+**Location**: `apps/web/src/components/ui/ColorPickerPopup.tsx`
+
+**Features**:
+- Portal-based glass morphism design with backdrop blur
+- Positioned relative to anchor element
+- Predefined color palette
+- Auto-closes on outside click
+- Consistent UX across the application
+
+**Example Usage**:
+```typescript
+import { ColorPickerPopup } from '@/components/ui/ColorPickerPopup';
+
+function MyComponent() {
+  const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedColor, setSelectedColor] = useState('#10B981');
+
+  const handleColorButtonClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    setColorPickerAnchor(e.currentTarget);
+    setIsOpen(true);
+  };
+
+  const handleColorChange = (color: string) => {
+    setSelectedColor(color);
+    // Your color change logic here
+  };
+
+  const handleClose = () => {
+    setIsOpen(false);
+    setColorPickerAnchor(null);
+  };
+
+  return (
+    <>
+      <button onClick={handleColorButtonClick}>
+        <div
+          className="w-3 h-3 rounded-sm border border-emerald-300"
+          style={{ backgroundColor: selectedColor }}
+        />
+      </button>
+
+      <ColorPickerPopup
+        selectedColor={selectedColor}
+        onColorChange={handleColorChange}
+        isOpen={isOpen}
+        onClose={handleClose}
+        anchorEl={colorPickerAnchor}
+      />
+    </>
+  );
+}
+```
+
+**DO NOT** create new color picker dropdowns or inline color selection UI. Always use this centralized component for consistency.
 
 ### Adding New SAM3 Endpoint
+
 1. Add Pydantic schema in `apps/api-inference/src/app/schemas/sam3.py`
 2. Implement inference method in `apps/api-inference/src/app/integrations/sam3/inference.py`
 3. Add route handler in `apps/api-inference/src/app/routers/sam3.py`
 4. Update frontend client in `apps/web/src/lib/sam3-client.ts`
 
-### Adding New Annotation Type
-1. Define type in `apps/web/src/types/annotations.ts`
-2. Update storage schema in `apps/web/src/lib/storage.ts`
-3. Add rendering logic in `apps/web/src/components/Canvas.tsx`
-4. Add tool UI in `apps/web/src/components/LeftSidebar.tsx`
+### Adding New Core API Endpoint
 
-### Troubleshooting Model Loading
-If model fails to load:
-```bash
-make docker-shell service=backend
-python -c "from transformers import Sam3Model; Sam3Model.from_pretrained('facebook/sam3')"
+1. Define database model in `apps/api-core/src/app/models/`
+2. Create Alembic migration: `cd apps/api-core/src && alembic revision --autogenerate -m "description"`
+3. Add Pydantic schemas in `apps/api-core/src/app/schemas/`
+4. Implement repository in `apps/api-core/src/app/repositories/`
+5. Add business logic in `apps/api-core/src/app/services/`
+6. Create route handler in `apps/api-core/src/app/routers/`
+7. Update frontend client in `apps/web/src/lib/api-client.ts`
+
+### Adding New Frontend Page
+
+**IMPORTANT: This project uses TanStack Router with code-based routing.**
+
+1. Create page component in `apps/web/src/pages/` (e.g., `MyPage.tsx`)
+2. Open `apps/web/src/routes/__root.tsx` and:
+   - Import your page component at the top
+   - Create a route using `createRoute()`:
+     ```typescript
+     const myPageRoute = createRoute({
+       getParentRoute: () => rootRoute, // or dashboardLayoutRoute for authenticated pages
+       path: '/my-page',
+       component: MyPage,
+     })
+     ```
+   - Add the route to the `routeTree` (bottom of file)
+3. Update navigation in `apps/web/src/components/DashboardLayout.tsx` if needed
+4. Add API client methods in `apps/web/src/lib/api-client.ts` if needed
+5. Update types in `apps/web/src/types/` if needed
+
+**Notes**:
+- All routes are manually defined in `src/routes/__root.tsx`
+- Use `$paramName` syntax for dynamic routes (e.g., `/projects/$projectId`)
+- Add routes under `authenticatedRoute` for protected pages
+- Use `validateSearch` with Zod schemas for type-safe query parameters
+
+### Animation System (Frontend)
+
+**Docs**:
+- `apps/web/ANIMATION_GUIDE.md`
+- `apps/web/ANIMATION_COMPLETE.md`
+- `apps/web/TOOLTIP_DEMO.md`
+
+**Demo page**: `GET /animations` (route defined in `apps/web/src/routes/__root.tsx`)
+
+**Implementation notes**:
+- Prefer importing primitives from `apps/web/src/components/ui/animate/index.ts`.
+- Respect accessibility: use `apps/web/src/hooks/useReducedMotion.ts` or reduced-motion helpers in `apps/web/src/lib/motion-config.ts`.
+- Keep colors/timings consistent via `apps/web/src/lib/motion-config.ts` (emerald theme).
+
+### Analytics Panel System
+
+**Location**: `apps/web/src/components/analytics/`
+
+**Key Components**:
+- `AnalyticsPanelContainer.tsx` - Panel container with add/remove functionality
+- `panels/EnhancedDatasetStatsPanel.tsx` - Consolidated dataset stats (Dimensions, Tags, Quality tabs)
+- `panels/AnnotationAnalysisPanel.tsx` - Annotation stats (Coverage, Spatial, Classes tabs)
+- `shared/HistogramChart.tsx` - Reusable histogram with multi-select support
+- `shared/SelectionActionBar.tsx` - Filter action bar for multi-select
+
+**Adding a New Analytics Panel**:
+1. Create panel component in `apps/web/src/components/analytics/panels/`
+2. Create React Query hook in `apps/web/src/hooks/use{PanelName}.ts`
+3. Add API client method in `apps/web/src/lib/analytics-client.ts`
+4. Register panel in `apps/web/src/components/analytics/panelRegistry.ts`
+5. Add type to `PanelType` union in `apps/web/src/types/analytics.ts`
+6. Add backend endpoint in `apps/api-core/src/app/routers/analytics.py`
+
+**Multi-Select Filtering Pattern**:
+```typescript
+import { useChartMultiSelect } from '@/hooks/useChartMultiSelect';
+import { SelectionActionBar } from '@/components/analytics/shared/SelectionActionBar';
+
+const { selectedIndices, handleBarClick, clearSelection } = useChartMultiSelect({
+  onFilterApply: (indices) => {
+    // Convert indices to filter values and update explore filters
+  },
+});
 ```
-Check HF_TOKEN is valid and SAM3 access is approved.
 
-### Debugging Frontend State
-IndexedDB state inspection:
-- Open browser DevTools → Application → IndexedDB → `sam3-annotations`
-- Stores: `images`, `annotations`, `labels`
+**Best Practices**:
+- Use consolidated panels (EnhancedDatasetStats, AnnotationAnalysis) over individual panels
+- Implement multi-select filtering for all histogram charts
+- Use `useChartMultiSelect` hook for consistent selection behavior
+- Show selection action bar below charts when items are selected
+- Use dynamic binning (Sturges' rule) for histograms
 
-## Package Management
+### Image Quality Metrics
 
-- **Backend**: Uses `uv` (fast Python package manager) with `pyproject.toml`
-- **Frontend**: Uses `npm` with `package.json`
-- Always run `make backend-install` from repository root after pulling backend dependency changes
-- Always run `npm install` in `apps/web` directory after pulling frontend dependency changes
-- Use `make install` from repository root to install all dependencies at once
+**Docs**: `/docs/features/quality-metrics-workflow.md`
 
-## Testing
+**Key Files**:
+- Backend task: `apps/api-core/src/app/tasks/quality.py`
+- Backend service: `apps/api-core/src/app/services/image_quality_service.py`
+- Frontend hook: `apps/web/src/hooks/useQualityProgress.ts`
 
-Backend tests: Use pytest in `apps/api-inference/src/tests/` (directory structure exists but tests not yet implemented)
+**Workflow**:
+1. User clicks "Process" in Quality tab
+2. Frontend calls `POST /analytics/start-quality-job`
+3. Backend creates Celery task and returns job_id
+4. Frontend polls `GET /analytics/quality-progress` every 2 seconds
+5. Worker computes metrics (sharpness, brightness, contrast, uniqueness)
+6. Frontend shows progress bar with accurate server-side counts
+7. On completion, React Query cache invalidates to refresh stats
 
-Frontend: No test suite currently configured (Vite default setup doesn't include testing framework)
+**Computed Metrics**:
+- `sharpness`: Laplacian variance (blur detection)
+- `brightness`: Mean pixel intensity (0.3-0.7 optimal)
+- `contrast`: Pixel std deviation
+- `uniqueness`: 1 - max perceptual hash similarity
+- `overall_quality`: Weighted composite score
+- `issues`: Auto-detected problems (blur, low_brightness, duplicate, etc.)
+
+## API Quick Reference
+
+### SAM3 Inference API (http://localhost:8000)
+- `POST /api/v1/sam3/inference/text` - Text prompt segmentation
+- `POST /api/v1/sam3/inference/bbox` - Bounding box segmentation
+- `POST /api/v1/sam3/inference/batch` - Batch processing
+- `GET /docs` - Swagger UI
+
+### Core API (http://localhost:8001)
+- `POST /api/v1/auth/register` - User registration
+- `POST /api/v1/auth/login` - User login
+- `GET /api/v1/projects` - List projects
+- `POST /api/v1/models` - Register BYOM model
+- `GET /api/v1/projects/{id}/analytics/enhanced-dataset-stats` - Consolidated dataset stats
+- `GET /api/v1/projects/{id}/analytics/annotation-analysis` - Annotation analysis
+- `POST /api/v1/projects/{id}/analytics/start-quality-job` - Start quality processing
+- `GET /api/v1/projects/{id}/analytics/quality-progress` - Poll quality job progress
+- `GET /docs` - Swagger UI
+
+## Additional Documentation
+
+- `/docs/Navigation.md` - Documentation index
+- `/docs/development/getting-started.md` - Getting started guide
+- `/docs/architecture/` - Architecture documentation
+- `/docs/development/byom-integration.md` - BYOM integration guide
+- `/docker/README.md` - Docker deployment modes

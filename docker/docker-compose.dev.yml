@@ -27,7 +27,100 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Frontend - React Annotation Platform
+  # API Core - Model Registry Service
+  api-core:
+    build:
+      context: ../apps/api-core
+      dockerfile: Dockerfile
+    container_name: anu-api-core-dev
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../apps/api-core/src:/app/src
+      - api-core-data:/app/data
+      - share-data:/data/share
+      - thumbnail-cache:/data/cache/thumbnails
+      - export-data:/data/exports
+    env_file:
+      - ../apps/api-core/.env
+    environment:
+      - SHARE_ROOT=/data/share
+      - SHARE_THUMBNAIL_CACHE_DIR=/data/cache/thumbnails
+      - EXPORT_ROOT=/data/exports
+      - API_CORE_DEBUG=true
+      - CORS_ORIGINS=["http://10.8.0.106:5173","http://10.8.0.106:8001","http://10.8.0.106:3000","http://localhost:5173","http://localhost:3000","http://10.8.0.106:80"]
+    restart: unless-stopped
+    networks:
+      - anu-network
+    depends_on:
+      - postgres
+      - redis
+
+  # API Core Worker - Celery Background Tasks
+  api-core-worker:
+    build:
+      context: ../apps/api-core
+      dockerfile: Dockerfile
+    container_name: anu-api-core-worker-dev
+    command: uv run celery -A app.tasks.main worker --loglevel=info
+    volumes:
+      - ../apps/api-core/src:/app/src
+      - api-core-data:/app/data
+      - share-data:/data/share
+      - export-data:/data/exports
+    env_file:
+      - ../apps/api-core/.env
+    environment:
+      - SHARE_ROOT=/data/share
+      - EXPORT_ROOT=/data/exports
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    restart: unless-stopped
+    networks:
+      - anu-network
+    depends_on:
+      - postgres
+      - redis
+
+  # PostgreSQL - Primary Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: anu-postgres-dev
+    environment:
+      POSTGRES_USER: annotateanu
+      POSTGRES_PASSWORD: annotateanu_dev
+      POSTGRES_DB: annotateanu
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - anu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U annotateanu"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Caching Layer
+  redis:
+    image: redis:7-alpine
+    container_name: anu-redis-dev
+    # ports:
+    #   - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - anu-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Frontend - React Annotation Platform (Development)
   frontend:
     build:
       context: ../apps/web
@@ -43,12 +136,49 @@ services:
       - ../apps/web/.env
     depends_on:
       - backend
+      - api-core
     networks:
       - anu-network
     command: npm run dev -- --host 0.0.0.0
+    profiles:
+      - dev
+
+  # Frontend - Production (Nginx)
+  frontend-prod:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+      target: production
+      args:
+        - VITE_SAM3_API_URL=http://10.8.0.106:8000
+        - VITE_CORE_API_URL=http://10.8.0.106:8001
+        - VITE_ENV=production
+    container_name: anu-frontend-prod
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+      - api-core
+    networks:
+      - anu-network
+    restart: unless-stopped
+    profiles:
+      - prod
 
 volumes:
   huggingface_cache:
+    driver: local
+  api-core-data:
+    driver: local
+  share-data:
+    driver: local
+  thumbnail-cache:
+    driver: local
+  export-data:
+    driver: local
+  redis-data:
+    driver: local
+  postgres-data:
     driver: local
 
 networks:

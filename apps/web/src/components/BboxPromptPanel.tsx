@@ -3,8 +3,21 @@ import { Loader2, X, Trash2, Square } from 'lucide-react'
 import { Button } from './ui/button'
 import { PromptModeSelector } from './ui/PromptModeSelector'
 import type { Label, ImageData, PromptMode } from '@/types/annotations'
-import { sam3Client } from '@/lib/sam3-client'
+import type { AvailableModel } from '@/types/byom'
+import { inferenceClient } from '@/lib/inference-client'
+import { imagesApi } from '@/lib/api-client'
 import toast from 'react-hot-toast'
+
+/**
+ * Fetch image as blob from URL (for job mode images)
+ */
+async function fetchImageAsBlob(url: string): Promise<Blob> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.statusText}`)
+  }
+  return await response.blob()
+}
 
 interface BboxPromptPanelProps {
   labels: Label[]
@@ -24,6 +37,7 @@ interface BboxPromptPanelProps {
   onClose: () => void
   promptBboxes?: Array<{ x: number; y: number; width: number; height: number; id: string; labelId: string }>
   onPromptBboxesChange?: (bboxes: Array<{ x: number; y: number; width: number; height: number; id: string; labelId: string }>) => void
+  selectedModel: AvailableModel
 }
 
 type AnnotationType = 'bbox' | 'polygon'
@@ -31,16 +45,19 @@ type AnnotationType = 'bbox' | 'polygon'
 export function BboxPromptPanel({
   labels,
   currentImage,
-  images,
+  // images, // Unused parameter
   promptMode,
   setPromptMode,
   onAnnotationsCreated,
   onClose,
   promptBboxes = [],
   onPromptBboxesChange,
+  selectedModel,
 }: BboxPromptPanelProps) {
   const [threshold, setThreshold] = useState(0.5)
   const [maskThreshold, setMaskThreshold] = useState(0.5)
+  const [simplifyEnabled, setSimplifyEnabled] = useState(false)
+  const [simplifyTolerance, setSimplifyTolerance] = useState(1.5)
   const [annotationType, setAnnotationType] = useState<AnnotationType>('polygon')
   const [isLoading, setIsLoading] = useState(false)
 
@@ -74,10 +91,31 @@ export function BboxPromptPanel({
     setIsLoading(true)
 
     try {
+      // Get image blob - for job mode, fetch from API; for local mode, use blob directly
+      let imageBlob: Blob
+
+      if (currentImage.s3Key && currentImage.jobId && currentImage.jobImageId) {
+        // Job mode: fetch image from API
+        const imageUrl = imagesApi.getFullImageUrl(
+          currentImage.s3Key,
+          currentImage.jobId.toString(),
+          currentImage.jobImageId
+        )
+        console.log('[BboxPromptPanel] Fetching job image from:', imageUrl)
+        imageBlob = await fetchImageAsBlob(imageUrl)
+      } else if (currentImage.blob && currentImage.blob.size > 0) {
+        // Local mode: use existing blob
+        imageBlob = currentImage.blob
+      } else {
+        throw new Error('No valid image data available')
+      }
+
       // Convert blob to File
-      const imageFile = new File([currentImage.blob], currentImage.name, {
-        type: currentImage.blob.type,
+      const imageFile = new File([imageBlob], currentImage.name, {
+        type: imageBlob.type || 'image/jpeg',
       })
+
+      console.log('[BboxPromptPanel] Image file size:', imageFile.size, 'bytes')
 
       // Group bboxes by label so we can assign correct labels to detected objects
       const bboxesByLabel = new Map<string, typeof promptBboxes>()
@@ -92,25 +130,27 @@ export function BboxPromptPanel({
 
       // Call API separately for each unique label
       for (const [labelId, bboxes] of bboxesByLabel) {
-        // Convert bboxes to API format: [[x1, y1, x2, y2, 1], ...]
+        // Convert bboxes to API format: [[x1, y1, x2, y2, label], ...]
+        // Label: 1 = positive (include), 0 = negative (exclude)
         const bboxesForAPI: Array<[number, number, number, number, number]> = bboxes.map((bbox) => {
           const x1 = bbox.x
           const y1 = bbox.y
           const x2 = bbox.x + bbox.width
           const y2 = bbox.y + bbox.height
-          return [x1, y1, x2, y2, 1] // Using 1 as the class ID
+          return [x1, y1, x2, y2, 1] // Using 1 as positive label (integer)
         })
 
-        // Call bbox prompt API
-        const response = await sam3Client.bboxPrompt({
+        // Call bbox prompt API using unified inference client
+        const result = await inferenceClient.bboxPrompt(selectedModel, {
           image: imageFile,
           bounding_boxes: bboxesForAPI,
           threshold,
           mask_threshold: maskThreshold,
+          simplify_tolerance: simplifyEnabled ? simplifyTolerance : 0,
           return_visualization: false,
         })
 
-        const { num_objects, boxes, masks, scores } = response.data
+        const { num_objects, boxes, masks, scores } = result
 
         if (num_objects > 0) {
           totalDetected += num_objects
@@ -122,7 +162,8 @@ export function BboxPromptPanel({
             masks,
             scores,
             annotationType,
-            labelId // Pass the label for this group
+            labelId, // Pass the label for this group
+            modelId: selectedModel.id
           })
         }
       }
@@ -377,6 +418,54 @@ export function BboxPromptPanel({
             <p className="mt-1 text-xs text-gray-600">
               Controls segmentation mask precision
             </p>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label htmlFor="simplifyTolerance" className="block text-sm font-medium text-gray-700">
+                Polygon Simplification{simplifyEnabled ? `: ${simplifyTolerance.toFixed(1)}` : ''}
+              </label>
+              <button
+                type="button"
+                onClick={() => setSimplifyEnabled(!simplifyEnabled)}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  simplifyEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+                disabled={isLoading}
+              >
+                <span
+                  className={`absolute h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-all duration-200 ${
+                    simplifyEnabled ? 'left-[18px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            {simplifyEnabled && (
+              <>
+                <input
+                  type="range"
+                  id="simplifyTolerance"
+                  min="0.1"
+                  max="10"
+                  step="0.1"
+                  value={simplifyTolerance}
+                  onChange={(e) => setSimplifyTolerance(parseFloat(e.target.value))}
+                  className="w-full slider-blue"
+                  style={{
+                    background: `linear-gradient(to right, rgb(37, 99, 235) 0%, rgb(37, 99, 235) ${((simplifyTolerance - 0.1) / 9.9) * 100}%, rgb(209, 213, 219) ${((simplifyTolerance - 0.1) / 9.9) * 100}%, rgb(209, 213, 219) 100%)`
+                  }}
+                  disabled={isLoading}
+                />
+                <p className="mt-1 text-xs text-gray-600">
+                  Reduces polygon points (higher = simpler polygons)
+                </p>
+              </>
+            )}
+            {!simplifyEnabled && (
+              <p className="text-xs text-gray-500">
+                Disabled - polygons will have full detail
+              </p>
+            )}
           </div>
         </div>
       </form>

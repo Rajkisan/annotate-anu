@@ -1,0 +1,216 @@
+"""Payload schemas for creating and updating models."""
+
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, Field, HttpUrl
+
+from app.schemas.models.base import ModelCapabilities
+
+
+def validate_endpoint_url(v: str) -> str:
+    """Validate endpoint URL allowing http, https, or internal schemes."""
+    if v.startswith("internal://"):
+        return v
+    # For non-internal URLs, validate as HttpUrl
+    HttpUrl(v)
+    return v
+
+
+# Custom type that accepts both HTTP URLs and internal:// URLs
+EndpointUrl = Annotated[str, AfterValidator(validate_endpoint_url)]
+
+
+class ResponseMapping(BaseModel):
+    """Map external API response fields to standard format.
+
+    Use this to configure how fields from external model APIs
+    map to the standardized inference response format.
+
+    Supports two response formats:
+    - ``flat_arrays`` (default): top-level arrays for boxes, scores, etc.
+    - ``object_list``: array of detection objects, each containing bbox/score/label.
+    """
+
+    # --- flat_arrays fields (default format) ---
+    boxes_field: str = Field(
+        default="boxes",
+        description="JSON path to bounding boxes (e.g., 'predictions.boxes' or 'detections')",
+    )
+    scores_field: str = Field(
+        default="scores",
+        description="JSON path to confidence scores (e.g., 'predictions.confidence')",
+    )
+    masks_field: str | None = Field(
+        default="masks",
+        description="JSON path to segmentation masks (null if not supported)",
+    )
+    labels_field: str | None = Field(
+        default="labels",
+        description="JSON path to class labels (e.g., 'class_names')",
+    )
+    num_objects_field: str | None = Field(
+        default=None,
+        description="JSON path to object count (computed from boxes if null)",
+    )
+
+    # --- object_list fields ---
+    response_format: str = Field(
+        default="flat_arrays",
+        description="Response format: 'flat_arrays' (default) or 'object_list'",
+    )
+    items_field: str = Field(
+        default="",
+        description="Dot-path to array of detection objects (empty string = root array)",
+    )
+    item_bbox_field: str = Field(
+        default="bbox",
+        description="Field name for bounding box in each detection object",
+    )
+    item_bbox_format: str = Field(
+        default="array",
+        description="Bbox format: 'array' for [x1,y1,x2,y2] or 'xyxy' for {xmin,ymin,xmax,ymax} dict",
+    )
+    item_score_field: str = Field(
+        default="score",
+        description="Field name for confidence score in each detection object",
+    )
+    item_label_field: str | None = Field(
+        default=None,
+        description="Field name for label string in each detection object (optional)",
+    )
+    item_class_id_field: str | None = Field(
+        default=None,
+        description="Field name for integer class ID in each detection object (optional)",
+    )
+    class_id_map: dict[str, str] | None = Field(
+        default=None,
+        description="Mapping from class ID (as string) to label name (e.g., {'0': 'fruitlet'})",
+    )
+
+
+class EndpointConfig(BaseModel):
+    """Configurable endpoint mapping for BYOM models.
+
+    Use this to customize how requests are made to external model APIs
+    and how their responses are parsed.
+    """
+
+    inference_path: str = Field(
+        default="/inference",
+        description="Path to inference endpoint (appended to endpoint_url)",
+    )
+    health_path: str = Field(
+        default="/health",
+        description="Path to health check endpoint (appended to endpoint_url)",
+    )
+    image_field_name: str = Field(
+        default="image",
+        description="Multipart form field name for the image file",
+    )
+    response_mapping: ResponseMapping | None = Field(
+        default=None,
+        description="Custom response field mapping (uses defaults if null)",
+    )
+
+
+class ModelCreatePayload(BaseModel):
+    """Payload for creating a new model."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Unique display name for the model"
+    )
+    endpoint_url: EndpointUrl = Field(
+        ...,
+        description="Base URL of the external model API (or internal:// for mock models)"
+    )
+    auth_token: str | None = Field(
+        default=None,
+        description="Bearer token for authentication (optional)"
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional description of the model"
+    )
+    capabilities: ModelCapabilities | None = Field(
+        default=None,
+        description="Model capabilities (auto-detected if not provided)"
+    )
+    endpoint_config: EndpointConfig | None = Field(
+        default=None,
+        description="Custom endpoint configuration for non-standard APIs"
+    )
+
+    def transform(self) -> dict:
+        """Transform payload for database insertion.
+
+        Returns
+        -------
+        dict
+            Transformed payload ready for database
+        """
+        data = self.model_dump(exclude_none=True)
+        # Convert capabilities to dict
+        if "capabilities" in data and isinstance(data["capabilities"], ModelCapabilities):
+            data["capabilities"] = data["capabilities"].model_dump()
+        # Convert endpoint_config to dict
+        if "endpoint_config" in data and isinstance(data["endpoint_config"], EndpointConfig):
+            data["endpoint_config"] = data["endpoint_config"].model_dump()
+        return data
+
+    model_config = {"json_schema_extra": {
+        "example": {
+            "name": "YOLOv8 Traffic Detection",
+            "endpoint_url": "https://my-yolo-api.com",
+            "auth_token": "bearer_token_here",
+            "description": "Custom YOLOv8 model trained on traffic scenes",
+            "capabilities": {
+                "supports_text_prompt": False,
+                "supports_bbox_prompt": False,
+                "supports_auto_detect": True,
+                "supports_class_filter": True,
+                "output_types": ["bbox", "polygon"],
+                "classes": ["car", "truck", "person", "bicycle"]
+            },
+            "endpoint_config": {
+                "inference_path": "/v1/detect",
+                "response_mapping": {
+                    "boxes_field": "predictions.boxes",
+                    "scores_field": "predictions.confidence",
+                    "labels_field": "predictions.class_names"
+                }
+            }
+        }
+    }}
+
+
+class ModelUpdatePayload(BaseModel):
+    """Payload for updating an existing model."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    endpoint_url: EndpointUrl | None = Field(default=None)
+    auth_token: str | None = Field(default=None)
+    description: str | None = Field(default=None, max_length=500)
+    capabilities: ModelCapabilities | None = Field(default=None)
+    endpoint_config: EndpointConfig | None = Field(default=None)
+    is_active: bool | None = Field(default=None)
+
+    def transform(self) -> dict:
+        """Transform payload for database update.
+
+        Returns
+        -------
+        dict
+            Transformed payload ready for database
+        """
+        data = self.model_dump(exclude_none=True)
+        # Convert capabilities to dict
+        if "capabilities" in data and isinstance(data["capabilities"], ModelCapabilities):
+            data["capabilities"] = data["capabilities"].model_dump()
+        # Convert endpoint_config to dict
+        if "endpoint_config" in data and isinstance(data["endpoint_config"], EndpointConfig):
+            data["endpoint_config"] = data["endpoint_config"].model_dump()
+        return data
