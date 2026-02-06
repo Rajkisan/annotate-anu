@@ -20,7 +20,8 @@ class HealthChecker:
     async def check_health(
         self,
         endpoint_url: str,
-        auth_token: str | None = None
+        auth_token: str | None = None,
+        health_path: str = "/health",
     ) -> tuple[bool, str, float | None]:
         """Check health of external model endpoint.
 
@@ -30,6 +31,8 @@ class HealthChecker:
             Base URL of the model
         auth_token : str | None
             Bearer token for authentication
+        health_path : str
+            Path to the health check endpoint (default: "/health")
 
         Returns
         -------
@@ -40,7 +43,7 @@ class HealthChecker:
         if endpoint_url.startswith("internal://"):
             return True, "Internal model (always healthy)", 0.0
 
-        health_url = f"{endpoint_url.rstrip('/')}/health"
+        health_url = f"{endpoint_url.rstrip('/')}{health_path}"
         headers = {}
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
@@ -55,11 +58,18 @@ class HealthChecker:
                 if response.status_code == 200:
                     try:
                         data = response.json()
+                        # Try standard format first: {"status": "healthy", ...}
                         health_response = ExternalHealthResponse(**data)
                         status_msg = f"Healthy: {health_response.status}"
                         return True, status_msg, response_time_ms
-                    except Exception as e:
-                        logger.warning(f"Invalid health response format: {e}")
+                    except Exception:
+                        # Accept alternative formats like {"success": true}
+                        try:
+                            data = response.json()
+                            if isinstance(data, dict) and data.get("success"):
+                                return True, "Healthy (success=true)", response_time_ms
+                        except Exception:
+                            pass
                         return True, "Healthy (non-standard response)", response_time_ms
                 else:
                     return False, f"HTTP {response.status_code}", response_time_ms

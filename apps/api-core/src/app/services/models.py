@@ -166,9 +166,13 @@ class ModelService:
 
         # Check health
         endpoint_url = str(payload.endpoint_url)
+        health_path = "/health"
+        if payload.endpoint_config:
+            health_path = payload.endpoint_config.health_path
         is_healthy, status_msg, response_time_ms = await self.health_checker.check_health(
             endpoint_url,
-            payload.auth_token
+            payload.auth_token,
+            health_path=health_path,
         )
 
         data["is_healthy"] = is_healthy
@@ -276,10 +280,16 @@ class ModelService:
         # Get model
         model = await self.repo.get_by_id(connection, model_id)
 
+        # Extract health_path from endpoint_config if available
+        health_path = "/health"
+        if model.endpoint_config and isinstance(model.endpoint_config, dict):
+            health_path = model.endpoint_config.get("health_path", "/health")
+
         # Perform health check
         is_healthy, status_msg, response_time_ms = await self.health_checker.check_health(
             model.endpoint_url,
-            model.auth_token
+            model.auth_token,
+            health_path=health_path,
         )
 
         # Update health status in database

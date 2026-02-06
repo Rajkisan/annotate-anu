@@ -73,5 +73,7 @@ htmlcov/
 *.tmp
 *.temp
 .claude
+.codex
+.agent
 backend/docs
 node_modules/.vite

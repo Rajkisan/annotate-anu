@@ -25,8 +25,13 @@ class ResponseMapping(BaseModel):
 
     Use this to configure how fields from external model APIs
     map to the standardized inference response format.
+
+    Supports two response formats:
+    - ``flat_arrays`` (default): top-level arrays for boxes, scores, etc.
+    - ``object_list``: array of detection objects, each containing bbox/score/label.
     """
 
+    # --- flat_arrays fields (default format) ---
     boxes_field: str = Field(
         default="boxes",
         description="JSON path to bounding boxes (e.g., 'predictions.boxes' or 'detections')",
@@ -48,6 +53,40 @@ class ResponseMapping(BaseModel):
         description="JSON path to object count (computed from boxes if null)",
     )
 
+    # --- object_list fields ---
+    response_format: str = Field(
+        default="flat_arrays",
+        description="Response format: 'flat_arrays' (default) or 'object_list'",
+    )
+    items_field: str = Field(
+        default="",
+        description="Dot-path to array of detection objects (empty string = root array)",
+    )
+    item_bbox_field: str = Field(
+        default="bbox",
+        description="Field name for bounding box in each detection object",
+    )
+    item_bbox_format: str = Field(
+        default="array",
+        description="Bbox format: 'array' for [x1,y1,x2,y2] or 'xyxy' for {xmin,ymin,xmax,ymax} dict",
+    )
+    item_score_field: str = Field(
+        default="score",
+        description="Field name for confidence score in each detection object",
+    )
+    item_label_field: str | None = Field(
+        default=None,
+        description="Field name for label string in each detection object (optional)",
+    )
+    item_class_id_field: str | None = Field(
+        default=None,
+        description="Field name for integer class ID in each detection object (optional)",
+    )
+    class_id_map: dict[str, str] | None = Field(
+        default=None,
+        description="Mapping from class ID (as string) to label name (e.g., {'0': 'fruitlet'})",
+    )
+
 
 class EndpointConfig(BaseModel):
     """Configurable endpoint mapping for BYOM models.
@@ -59,6 +98,14 @@ class EndpointConfig(BaseModel):
     inference_path: str = Field(
         default="/inference",
         description="Path to inference endpoint (appended to endpoint_url)",
+    )
+    health_path: str = Field(
+        default="/health",
+        description="Path to health check endpoint (appended to endpoint_url)",
+    )
+    image_field_name: str = Field(
+        default="image",
+        description="Multipart form field name for the image file",
     )
     response_mapping: ResponseMapping | None = Field(
         default=None,

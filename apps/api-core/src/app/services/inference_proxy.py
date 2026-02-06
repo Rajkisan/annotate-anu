@@ -708,9 +708,16 @@ class InferenceProxyService:
         # Get custom endpoint path from config, default to /inference
         inference_path = "/inference"
         response_mapping = None
+        image_field_name = "image"
+        send_mode_field = True
         if model.endpoint_config:
             inference_path = model.endpoint_config.get("inference_path", "/inference")
             response_mapping = model.endpoint_config.get("response_mapping")
+            image_field_name = model.endpoint_config.get("image_field_name", "image")
+            # Don't send 'mode' field if health_path is custom (external API)
+            # or if explicitly configured
+            if model.endpoint_config.get("health_path", "/health") != "/health":
+                send_mode_field = False
 
         url = f"{model.endpoint_url.rstrip('/')}{inference_path}"
 
@@ -720,8 +727,10 @@ class InferenceProxyService:
         if model.auth_token:
             headers["Authorization"] = f"Bearer {model.auth_token}"
 
-        files = {"image": (image_filename, image_bytes, image_content_type)}
-        data = {"mode": mode}
+        files = {image_field_name: (image_filename, image_bytes, image_content_type)}
+        data = {}
+        if send_mode_field:
+            data["mode"] = mode
 
         # Add mode-specific params
         for key, value in params.items():
@@ -745,7 +754,7 @@ class InferenceProxyService:
 
         result = response.json()
         # Handle both wrapped and unwrapped responses
-        if "data" in result:
+        if isinstance(result, dict) and "data" in result:
             result = result["data"]
 
         return self._normalize_byom_response(result, response_mapping)
@@ -800,14 +809,14 @@ class InferenceProxyService:
         return current
 
     def _normalize_byom_response(
-        self, data: dict, response_mapping: dict | None = None
+        self, data: dict | list, response_mapping: dict | None = None
     ) -> InferenceResponse:
         """Normalize BYOM response to standard format.
 
         Parameters
         ----------
-        data : dict
-            Raw BYOM API response data
+        data : dict | list
+            Raw BYOM API response data (dict for flat_arrays, list or dict for object_list)
         response_mapping : dict | None
             Custom field mapping configuration
 
@@ -816,8 +825,17 @@ class InferenceProxyService:
         InferenceResponse
             Standardized response
         """
-        # Use custom mapping or defaults
         mapping = response_mapping or {}
+        response_format = mapping.get("response_format", "flat_arrays")
+
+        # Dispatch to object-list handler if configured
+        if response_format == "object_list":
+            return self._normalize_byom_object_list_response(data, mapping)
+
+        # --- flat_arrays format (default) ---
+        if not isinstance(data, dict):
+            data = {}
+
         boxes_field = mapping.get("boxes_field", "boxes")
         scores_field = mapping.get("scores_field", "scores")
         masks_field = mapping.get("masks_field", "masks")
@@ -857,4 +875,99 @@ class InferenceProxyService:
             labels=labels,
             processing_time_ms=data.get("processing_time_ms", 0),
             visualization_base64=data.get("visualization_base64"),
+        )
+
+    def _normalize_byom_object_list_response(
+        self, data: dict | list, mapping: dict
+    ) -> InferenceResponse:
+        """Normalize object-list format BYOM response.
+
+        Handles APIs that return an array of detection objects like:
+        ``[{bbox: {xmin, ymin, xmax, ymax}, score: 0.9, class_id: 0}, ...]``
+
+        Parameters
+        ----------
+        data : dict | list
+            Raw response (list at root, or dict with items nested at items_field)
+        mapping : dict
+            Response mapping configuration
+
+        Returns
+        -------
+        InferenceResponse
+            Standardized response
+        """
+        items_field = mapping.get("items_field", "")
+        item_bbox_field = mapping.get("item_bbox_field", "bbox")
+        item_bbox_format = mapping.get("item_bbox_format", "array")
+        item_score_field = mapping.get("item_score_field", "score")
+        item_label_field = mapping.get("item_label_field")
+        item_class_id_field = mapping.get("item_class_id_field")
+        class_id_map = mapping.get("class_id_map") or {}
+
+        # Get the items array
+        if items_field and isinstance(data, dict):
+            items = self._get_nested_value(data, items_field) or []
+        elif isinstance(data, list):
+            items = data
+        elif isinstance(data, dict) and not items_field:
+            # Empty items_field but data is a dict — try common wrapper keys
+            items = data.get("detections") or data.get("results") or data.get("predictions") or []
+        else:
+            items = []
+
+        boxes = []
+        scores = []
+        labels = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            # Extract bbox
+            raw_bbox = item.get(item_bbox_field)
+            if raw_bbox is None:
+                continue
+
+            if item_bbox_format == "xyxy" and isinstance(raw_bbox, dict):
+                # {xmin, ymin, xmax, ymax} dict → [x1, y1, x2, y2]
+                box = [
+                    raw_bbox.get("xmin", 0),
+                    raw_bbox.get("ymin", 0),
+                    raw_bbox.get("xmax", 0),
+                    raw_bbox.get("ymax", 0),
+                ]
+            elif isinstance(raw_bbox, (list, tuple)):
+                box = list(raw_bbox)
+            else:
+                continue
+
+            boxes.append(box)
+
+            # Extract score
+            score = item.get(item_score_field, 0.0)
+            scores.append(float(score))
+
+            # Resolve label
+            label = None
+            if item_label_field:
+                label = item.get(item_label_field)
+            if label is None and item_class_id_field and class_id_map:
+                class_id = item.get(item_class_id_field)
+                if class_id is not None:
+                    label = class_id_map.get(str(class_id))
+            labels.append(label or "object")
+
+        processing_time = 0.0
+        if isinstance(data, dict):
+            processing_time = data.get("processing_time_ms", 0.0)
+
+        return InferenceResponse(
+            num_objects=len(boxes),
+            boxes=boxes,
+            scores=scores,
+            masks=[],
+            labels=labels,
+            processing_time_ms=processing_time,
+            visualization_base64=None,
         )
