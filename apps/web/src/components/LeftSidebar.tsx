@@ -1,4 +1,4 @@
-import type { ImageData, Label, PromptMode, Tool } from '@/types/annotations'
+import type { Annotation, ImageData, Label, PromptMode, Tool } from '@/types/annotations'
 import type { AvailableModel } from '@/types/byom'
 import { FileText, Keyboard, Maximize2, MousePointer, Pentagon, Redo, Scissors, Square, Target, Undo, ZoomIn, ZoomOut } from 'lucide-react'
 import { useState } from 'react'
@@ -21,13 +21,16 @@ interface LeftSidebarProps {
   images: ImageData[]
   promptMode: PromptMode
   setPromptMode: (mode: PromptMode) => void
+  allAnnotations: Annotation[]
   onAnnotationsCreated: (results: {
     boxes: Array<[number, number, number, number]>
     masks: Array<{ polygons: Array<Array<[number, number]>>; area: number }>
     scores: number[]
     annotationType: 'bbox' | 'polygon'
     labelId?: string
+    labelIds?: string[]
     imageId?: string
+    modelId?: string
   }) => void
   onBboxPromptModeChange?: (enabled: boolean) => void
   onAIPanelActiveChange?: (active: boolean) => void
@@ -138,6 +141,7 @@ export function LeftSidebar({
   onSelectLabel,
   currentImage,
   images,
+  allAnnotations,
   promptMode,
   setPromptMode,
   onAnnotationsCreated,
@@ -492,6 +496,8 @@ export function LeftSidebar({
               labels={labels}
               selectedLabelId={selectedLabelId}
               currentImage={currentImage}
+              images={images}
+              allAnnotations={allAnnotations}
               onAnnotationsCreated={onAnnotationsCreated}
               onClose={handlePanelClose}
               selectedModel={selectedModel}

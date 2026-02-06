@@ -769,6 +769,7 @@ function AnnotationApp() {
     scores: number[]
     annotationType: 'bbox' | 'polygon'
     labelId?: string
+    labelIds?: string[] // per-detection label IDs (from label mapping)
     imageId?: string
     modelId?: string
   }) => {
@@ -776,33 +777,28 @@ function AnnotationApp() {
     const targetImageId = results.imageId || currentImageId
     if (!targetImageId) return
 
-    // Use the labelId from results if provided, otherwise use selectedLabelId
-    const labelToUse = results.labelId || selectedLabelId
-    if (!labelToUse) return
+    // Fallback label for detections without per-detection labelIds
+    const fallbackLabel = results.labelId || selectedLabelId
 
     const now = Date.now()
     const annotationsToAdd: Annotation[] = []
 
     if (results.annotationType === 'bbox') {
-      // Create rectangle annotations from bounding boxes
       for (let i = 0; i < results.boxes.length; i++) {
-        const [x1, y1, x2, y2] = results.boxes[i]
+        const labelForDetection = results.labelIds?.[i] || fallbackLabel
+        if (!labelForDetection) continue
 
-        // Convert from [x1, y1, x2, y2] to [x, y, width, height]
-        const x = x1
-        const y = y1
-        const width = x2 - x1
-        const height = y2 - y1
+        const [x1, y1, x2, y2] = results.boxes[i]
 
         const annotation: RectangleAnnotation = {
           id: generateUUID(),
           imageId: targetImageId,
-          labelId: labelToUse,
+          labelId: labelForDetection,
           type: 'rectangle',
-          x,
-          y,
-          width,
-          height,
+          x: x1,
+          y: y1,
+          width: x2 - x1,
+          height: y2 - y1,
           createdAt: now,
           updatedAt: now,
           confidence: results.scores[i],
@@ -813,21 +809,20 @@ function AnnotationApp() {
         annotationsToAdd.push(annotation)
       }
     } else {
-      // Create polygon annotations from masks
       for (let i = 0; i < results.masks.length; i++) {
+        const labelForDetection = results.labelIds?.[i] || fallbackLabel
+        if (!labelForDetection) continue
+
         const mask = results.masks[i]
 
-        // Use the first polygon from the mask (SAM3 can return multiple polygons per mask)
         if (mask.polygons.length > 0) {
           const polygonCoords = mask.polygons[0]
-
-          // Convert from [x, y] tuples to {x, y} objects
           const points = polygonCoords.map(([x, y]) => ({ x, y }))
 
           const annotation: PolygonAnnotation = {
             id: generateUUID(),
             imageId: targetImageId,
-            labelId: labelToUse,
+            labelId: labelForDetection,
             type: 'polygon',
             points,
             createdAt: now,
@@ -843,12 +838,11 @@ function AnnotationApp() {
     }
 
     // Batch add all annotations in a single transaction for better performance
-    // This updates both IndexedDB AND React state
     if (annotationsToAdd.length > 0) {
       await addManyAnnotations(annotationsToAdd)
     }
 
-    // Record history after AI annotations are created (no delay needed with batch operation)
+    // Record history after AI annotations are created
     if (!isUndoingRef.current && currentImageId) {
       recordChange(annotations.filter(a => a.imageId === (results.imageId || currentImageId)))
     }
@@ -1331,6 +1325,7 @@ function AnnotationApp() {
             onSelectLabel={setSelectedLabelId}
             currentImage={currentImage || null}
             images={images}
+            allAnnotations={annotations}
             promptMode={promptMode}
             setPromptMode={setPromptMode}
             onAnnotationsCreated={handleAutoAnnotateResults}

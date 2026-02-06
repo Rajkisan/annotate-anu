@@ -232,3 +232,11 @@ export interface LoadingProgress {
     total: number
   }
 }
+
+// Auto-detect label mapping types
+export interface DetectionLabelMapping {
+  action: 'map' | 'skip'
+  projectLabelId?: string // required when action='map'
+}
+
+export type DetectionLabelMappingConfig = Record<string, DetectionLabelMapping>
