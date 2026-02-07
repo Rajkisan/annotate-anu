@@ -44,10 +44,18 @@ export function TextPromptPanel({
   onLoadingChange,
   onTextPromptChange,
 }: TextPromptPanelProps) {
-  const [textPrompt, setTextPrompt] = useState(() => {
-    const saved = localStorage.getItem('textPrompt')
-    return saved || ''
-  })
+  // Load saved prompts per label from localStorage
+  const loadLabelPrompts = (): Record<string, string> => {
+    try {
+      const saved = localStorage.getItem('labelTextPrompts')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  const [labelPrompts, setLabelPrompts] = useState<Record<string, string>>(loadLabelPrompts)
+  const [textPrompt, setTextPrompt] = useState('')
   const [labelId, setLabelId] = useState(selectedLabelId || '')
   const [threshold, setThreshold] = useState(0.25)
   const [maskThreshold, setMaskThreshold] = useState(0.25)
@@ -65,22 +73,27 @@ export function TextPromptPanel({
   const [hasRunOnce, setHasRunOnce] = useState(false)
   const lastProcessedImageIdRef = useRef<string | null>(null)
 
-  // Sync labelId with selectedLabelId from parent
+  // Sync labelId and load saved prompt when label changes
   useEffect(() => {
     if (selectedLabelId) {
       setLabelId(selectedLabelId)
+      // Load saved prompt for this label
+      const savedPrompt = labelPrompts[selectedLabelId] || ''
+      setTextPrompt(savedPrompt)
     }
-  }, [selectedLabelId])
+  }, [selectedLabelId, labelPrompts])
 
   // Notify parent of text prompt changes for indicator display
   useEffect(() => {
     onTextPromptChange?.(textPrompt)
   }, [textPrompt, onTextPromptChange])
 
-  // Persist text prompt to localStorage
-  useEffect(() => {
-    localStorage.setItem('textPrompt', textPrompt)
-  }, [textPrompt])
+  // Save text prompt for current label to localStorage
+  const savePromptForLabel = (labelIdToSave: string, prompt: string) => {
+    const updated = { ...labelPrompts, [labelIdToSave]: prompt }
+    setLabelPrompts(updated)
+    localStorage.setItem('labelTextPrompts', JSON.stringify(updated))
+  }
 
   // Reset auto-apply state only when switching away from auto-apply mode
   useEffect(() => {
@@ -184,6 +197,9 @@ export function TextPromptPanel({
         console.log(`[AUTO-APPLY] Creating ${num_objects} annotations`)
         await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId })
 
+        // Save the prompt for this label
+        savePromptForLabel(labelId, textPrompt)
+
         toast.success(`Auto-detected ${num_objects} object${num_objects > 1 ? 's' : ''} in "${currentImage.name}"`)
       } catch (error) {
         console.error('[AUTO-APPLY] Error occurred:', error)
@@ -253,6 +269,9 @@ export function TextPromptPanel({
       await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId })
 
       toast.success(`Successfully detected ${num_objects} object${num_objects > 1 ? 's' : ''}!`)
+
+      // Save the prompt for this label
+      savePromptForLabel(labelId, textPrompt)
 
       // Mark that user has run at least once (enables auto-apply)
       setHasRunOnce(true)
@@ -354,6 +373,12 @@ export function TextPromptPanel({
 
     const successCount = batchProgress.filter(p => p.status === 'success').length
     const errorCount = batchProgress.filter(p => p.status === 'error').length
+    
+    // Save the prompt for this label after successful batch
+    if (successCount > 0) {
+      savePromptForLabel(labelId, textPrompt)
+    }
+    
     toast.success(`Batch complete: ${successCount} succeeded, ${errorCount} failed`)
   }
 
