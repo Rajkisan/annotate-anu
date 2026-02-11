@@ -22,6 +22,7 @@ interface TextPromptPanelProps {
     annotationType: 'bbox' | 'polygon'
     labelId?: string
     imageId?: string
+    createBBoxOverlay?: boolean
   }) => void
   onClose: () => void
   currentAnnotations?: any[] // Add annotations to check if image already has AI annotations
@@ -60,6 +61,7 @@ export function TextPromptPanel({
   const [threshold, setThreshold] = useState(0.25)
   const [maskThreshold, setMaskThreshold] = useState(0.25)
   const [annotationType, setAnnotationType] = useState<AnnotationType>('polygon')
+  const [generateBBox, setGenerateBBox] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
   // Batch mode state
@@ -73,26 +75,43 @@ export function TextPromptPanel({
   const [hasRunOnce, setHasRunOnce] = useState(false)
   const lastProcessedImageIdRef = useRef<string | null>(null)
 
-  // Sync labelId and load saved prompt when label changes
+  // Sync labelId from props
   useEffect(() => {
     if (selectedLabelId) {
       setLabelId(selectedLabelId)
-      // Load saved prompt for this label
-      const savedPrompt = labelPrompts[selectedLabelId] || ''
-      setTextPrompt(savedPrompt)
     }
-  }, [selectedLabelId, labelPrompts])
+  }, [selectedLabelId])
+
+  // Load saved prompt when labelId changes (from prop or selection)
+  useEffect(() => {
+    if (labelId) {
+      const savedPrompt = labelPrompts[labelId] || ''
+      setTextPrompt(savedPrompt)
+      console.log(`[TextPrompt] Loaded saved prompt for label ${labelId}:`, savedPrompt)
+    }
+  }, [labelId, labelPrompts]) // Load when label ID changes or prompts update
 
   // Notify parent of text prompt changes for indicator display
   useEffect(() => {
     onTextPromptChange?.(textPrompt)
   }, [textPrompt, onTextPromptChange])
 
-  // Save text prompt for current label to localStorage
+  // Save text prompt for current label to localStorage whenever it changes
+  useEffect(() => {
+    if (labelId && textPrompt) {
+      const updated = { ...labelPrompts, [labelId]: textPrompt }
+      setLabelPrompts(updated)
+      localStorage.setItem('labelTextPrompts', JSON.stringify(updated))
+      console.log(`[TextPrompt] Auto-saved prompt for label ${labelId}:`, textPrompt)
+    }
+  }, [textPrompt, labelId])
+
+  // Save text prompt for current label to localStorage (manual save)
   const savePromptForLabel = (labelIdToSave: string, prompt: string) => {
     const updated = { ...labelPrompts, [labelIdToSave]: prompt }
     setLabelPrompts(updated)
     localStorage.setItem('labelTextPrompts', JSON.stringify(updated))
+    console.log(`[TextPrompt] Manually saved prompt for label ${labelIdToSave}:`, prompt)
   }
 
   // Reset auto-apply state only when switching away from auto-apply mode
@@ -195,7 +214,7 @@ export function TextPromptPanel({
 
         // Use selected annotation type and label
         console.log(`[AUTO-APPLY] Creating ${num_objects} annotations`)
-        await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId })
+        await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, createBBoxOverlay: generateBBox })
 
         // Save the prompt for this label
         savePromptForLabel(labelId, textPrompt)
@@ -266,7 +285,7 @@ export function TextPromptPanel({
       }
 
       // Use selected annotation type and label
-      await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId })
+      await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, createBBoxOverlay: generateBBox })
 
       toast.success(`Successfully detected ${num_objects} object${num_objects > 1 ? 's' : ''}!`)
 
@@ -497,6 +516,21 @@ export function TextPromptPanel({
                 </div>
               </div>
             </label>
+
+            {annotationType === 'polygon' && (
+              <div className="ml-7 mt-1 animate-fadeIn">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={generateBBox}
+                    onChange={(e) => setGenerateBBox(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    disabled={isLoading}
+                  />
+                  <span className="text-xs text-gray-700">Also create bounding boxes</span>
+                </label>
+              </div>
+            )}
 
             <label className="flex items-center space-x-3 cursor-pointer">
               <input

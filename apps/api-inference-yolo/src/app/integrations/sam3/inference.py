@@ -32,7 +32,8 @@ class SAM3Inference:
         
         self.model_path = resolved_path
         self.device = self._get_device()
-        self.predictor = None
+        self.feature_predictor = None
+        self.inference_predictor = None
         self.visualizer = Sam3Visualizer()
 
         logger.info(f"SAM3 (Ultralytics) inference initialized - Model: {self.model_path}, Device: {self.device}")
@@ -102,13 +103,27 @@ class SAM3Inference:
             task="segment",
             mode="predict",
             model=self.model_path,
-            half=True if self.device == "cuda" else False,  # Use FP16 for faster inference on CUDA
+            half=False,  # Use full precision as requested
             save=False,  # Don't save prediction results to disk
-            device=self.device
+            device=self.device,
+            verbose=False  # Reduce noise in logs
         )
         
         try:
-            self.predictor = SAM3SemanticPredictor(overrides=overrides)
+            # Initialize two predictors to follow the working reference implementation exactly
+            # One for feature extraction (image encoding), one for inference (decoding)
+            self.feature_predictor = SAM3SemanticPredictor(overrides=overrides)
+            self.inference_predictor = SAM3SemanticPredictor(overrides=overrides)
+            
+            # Setup both models
+            self.feature_predictor.setup_model()
+            self.inference_predictor.setup_model()
+            
+            # Share the underlying model to save VRAM if possible, while keeping separate predictor states
+            if hasattr(self.feature_predictor, 'model') and self.feature_predictor.model is not None:
+                self.inference_predictor.model = self.feature_predictor.model
+                logger.info("Shared underlying model between predictors to optimized VRAM")
+            
             logger.info(f"SAM3 model loaded successfully on {self.device} (FP16: {overrides['half']})")
         except Exception as e:
             logger.error(f"Failed to load SAM3 model: {e}")
@@ -135,7 +150,7 @@ class SAM3Inference:
         return np.array(image_pil) 
 
     async def _run_inference(self, image_np, conf_threshold=None, **kwargs) -> tuple:
-        """Shared inference logic following test-yolo-sam3.py pattern.
+        """Shared inference logic following feature-based inference pattern.
         
         Args:
             image_np: Image as numpy array
@@ -143,25 +158,70 @@ class SAM3Inference:
             **kwargs: Arguments to pass to predictor (text, bboxes, etc.)
         """
         
-        # Update predictor confidence if specified
-        if conf_threshold is not None and hasattr(self.predictor, 'args'):
-            self.predictor.args.conf = conf_threshold
+        # Update predictor confidence if specified for inference predictor
+        if conf_threshold is not None and hasattr(self.inference_predictor, 'args'):
+            self.inference_predictor.args.conf = conf_threshold
             logger.info(f"Set confidence threshold to {conf_threshold}")
         
-        # Set image (like predictor.set_image() in test script)
-        self.predictor.set_image(image_np)
-        
-        # Run prediction (like predictor(text=[...]) in test script)
-        results = self.predictor(**kwargs)
-        
-        # Handle results - Ultralytics returns Results object or list
-        if isinstance(results, list):
-            result = results[0] if len(results) > 0 else None
+        # 1. Extract features using feature_predictor (like predictor.set_image())
+        # Ultralytics models typically expect BGR format when passed numpy arrays directly
+        # because they are built around OpenCV which uses BGR by default
+        if image_np.ndim == 3 and image_np.shape[2] == 3:
+            logger.info("Converting image from RGB to BGR for Ultralytics predictor")
+            image_input = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
         else:
-            result = results
+            image_input = image_np
+            
+        self.feature_predictor.set_image(image_input)
+        src_shape = image_np.shape[:2]  # Get image shape (height, width)
         
-        if result is None:
-            logger.warning("No results returned from predictor")
+        # Verify features are extracted
+        if not hasattr(self.feature_predictor, 'features') or self.feature_predictor.features is None:
+            logger.error("Failed to extract features from image")
+            return None, None, [], [], []
+        
+        # 2. Run inference using inference_predictor reusing features (like predictor2.inference_features)
+        try:
+            # Extract text or bboxes from kwargs
+            text_prompts = kwargs.get('text', None)
+            bboxes = kwargs.get('bboxes', None)
+            
+            if text_prompts is not None:
+                logger.info(f"Running feature-based inference with text prompts: {text_prompts}")
+                masks, boxes = self.inference_predictor.inference_features(
+                    self.feature_predictor.features,
+                    src_shape=src_shape,
+                    text=text_prompts
+                )
+            elif bboxes is not None:
+                logger.info(f"Running feature-based inference with {len(bboxes)} bounding boxes")
+                masks, boxes = self.inference_predictor.inference_features(
+                    self.feature_predictor.features,
+                    src_shape=src_shape,
+                    bboxes=bboxes
+                )
+            else:
+                logger.error("No text prompts or bounding boxes provided")
+                return None, None, [], [], []
+            
+            # Inference result logging
+            box_count = 0
+            mask_count = 0
+            
+            if boxes is not None:
+                box_count = len(boxes)
+                if torch.is_tensor(boxes):
+                    logger.info(f"Boxes tensor shape: {boxes.shape}, device: {boxes.device}")
+            
+            if masks is not None:
+                mask_count = len(masks)
+                if torch.is_tensor(masks):
+                    logger.info(f"Masks tensor shape: {masks.shape}, device: {masks.device}")
+
+            logger.info(f"Feature-based inference successful: {mask_count} masks, {box_count} boxes")
+            
+        except Exception as e:
+            logger.error(f"Feature-based inference failed: {e}", exc_info=True)
             return None, None, [], [], []
         
         boxes_list = []
@@ -169,28 +229,30 @@ class SAM3Inference:
         masks_polygon = []
         masks_tensor = None
         
-        # Extract masks
-        if hasattr(result, 'masks') and result.masks is not None:
-            masks_tensor = result.masks.data  # Get mask tensors [N, H, W]
+        # Process masks
+        if masks is not None and len(masks) > 0:
+            masks_tensor = masks  # Already tensor format from inference_features
             # Convert masks to polygon format
             masks_polygon = masks_to_polygon_data(masks_tensor)
             logger.info(f"Extracted {len(masks_polygon)} mask(s)")
         else:
             logger.warning("No masks found in results")
 
-        # Extract boxes and scores
-        if hasattr(result, 'boxes') and result.boxes is not None:
-            boxes_list = result.boxes.xyxy.cpu().tolist()  # [x1, y1, x2, y2] format
-            if hasattr(result.boxes, 'conf') and result.boxes.conf is not None:
-                scores_list = result.boxes.conf.cpu().tolist()
-            else:
-                # Default confidence if not available
-                scores_list = [1.0] * len(boxes_list)
-            logger.info(f"Extracted {len(boxes_list)} box(es) with confidences: {scores_list}")
+        # Process boxes - inference_features returns boxes as tensor
+        if boxes is not None and len(boxes) > 0:
+            boxes_list = boxes.cpu().tolist() if torch.is_tensor(boxes) else boxes.tolist()
+            # inference_features doesn't return confidence scores directly
+            # Use default confidence based on threshold
+            scores_list = [conf_threshold if conf_threshold else settings.SAM3_DEFAULT_THRESHOLD] * len(boxes_list)
+            logger.info(f"Extracted {len(boxes_list)} box(es)")
+            
+            # Log confidence for each detection
+            for idx, (box, score) in enumerate(zip(boxes_list, scores_list)):
+                logger.info(f"  Detection #{idx+1}: bbox={box}, confidence={score:.4f}")
         else:
             logger.warning("No boxes found in results")
 
-        return result, masks_tensor, boxes_list, scores_list, masks_polygon
+        return None, masks_tensor, boxes_list, scores_list, masks_polygon
 
 
     async def inference_text(

@@ -823,6 +823,10 @@ const Canvas = React.memo(function Canvas({
             const color = label?.color || '#f97316'
             const labelName = label?.name || 'Unknown'
             const isSelected = selectedAnnotation === annotation.id
+            
+            // Check if this annotation is part of a group and should skip label rendering
+            const shouldSkipLabel = annotation.groupId && 
+              visibleAnnotations.some(a => a.groupId === annotation.groupId && a.type === 'polygon' && a.id !== annotation.id)
 
             if (annotation.type === 'rectangle') {
               const rect = annotation as RectangleAnnotation
@@ -849,17 +853,19 @@ const Canvas = React.memo(function Canvas({
                     onDragEnd={(e) => handleDragEnd(annotation, e)}
                     onTransformEnd={(e) => handleTransformEnd(annotation, e)}
                   />
-                  {/* Label text above rectangle */}
-                  <Text
-                    key={`rect-label-${annotation.id}`}
-                    x={rect.x * scale}
-                    y={rect.y * scale - 20}
-                    text={labelName}
-                    fontSize={getZoomAdjustedSize(14, zoomLevel)}
-                    fill="white"
-                    padding={4}
-                    listening={false}
-                  />
+                  {/* Label text above rectangle - only if not part of a grouped bbox+polygon */}
+                  {!shouldSkipLabel && (
+                    <Text
+                      key={`rect-label-${annotation.id}`}
+                      x={rect.x * scale}
+                      y={rect.y * scale - 20}
+                      text={labelName}
+                      fontSize={getZoomAdjustedSize(14, zoomLevel)}
+                      fill="white"
+                      padding={4}
+                      listening={false}
+                    />
+                  )}
                 </React.Fragment>
               )
             } else if (annotation.type === 'polygon') {
@@ -905,8 +911,8 @@ const Canvas = React.memo(function Canvas({
                     }}
                     onTap={() => onSelectAnnotation(annotation.id)}
                   />
-                  {/* Label text above polygon (use first point) */}
-                  {displayPoints.length > 0 && (
+                  {/* Label text above polygon (use first point) - only if not part of a grouped bbox+polygon */}
+                  {displayPoints.length > 0 && !shouldSkipLabel && (
                     <Text
                       key={`poly-label-${annotation.id}`}
                       x={displayPoints[0].x * scale}

@@ -86,8 +86,17 @@ cleanup() {
     echo "Stopping services..."
     kill $BACKEND_PID 2>/dev/null || true
     kill $FRONTEND_PID 2>/dev/null || true
+    
+    # Send kill signal aggressively just in case
     lsof -ti:8000 | xargs kill -9 2>/dev/null || true
     lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+
+    # Wait for processes to actually stop
+    echo "Waiting for services to stop..."
+    while kill -0 $BACKEND_PID 2>/dev/null || kill -0 $FRONTEND_PID 2>/dev/null; do
+        sleep 0.5
+    done
+
     echo "✅ Services stopped"
     exit 0
 }

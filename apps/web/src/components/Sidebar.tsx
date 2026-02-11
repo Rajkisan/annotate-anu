@@ -83,13 +83,34 @@ export default function Sidebar({
     return 0
   })
 
-  // Group annotations by label
+  // Group annotations by label, and filter out secondary grouped items
   const annotationsByLabel: Record<string, Annotation[]> = {}
+  const groupedAnnotations = new Set<string>()
+  
+  // First pass: identify grouped annotations
   sortedAnnotations.forEach(ann => {
-    if (!annotationsByLabel[ann.labelId]) {
-      annotationsByLabel[ann.labelId] = []
+    if (ann.groupId) {
+      // Find all annotations with the same groupId
+      const group = sortedAnnotations.filter(a => a.groupId === ann.groupId)
+      if (group.length > 1) {
+        // Mark non-polygon annotations for hiding (keep polygon as primary)
+        group.forEach(a => {
+          if (a.type !== 'polygon') {
+            groupedAnnotations.add(a.id)
+          }
+        })
+      }
     }
-    annotationsByLabel[ann.labelId].push(ann)
+  })
+  
+  // Second pass: build label groups (excluding hidden grouped items)
+  sortedAnnotations.forEach(ann => {
+    if (!groupedAnnotations.has(ann.id)) {
+      if (!annotationsByLabel[ann.labelId]) {
+        annotationsByLabel[ann.labelId] = []
+      }
+      annotationsByLabel[ann.labelId].push(ann)
+    }
   })
 
   // Count auto annotations and low confidence
@@ -569,6 +590,9 @@ export default function Sidebar({
                                   <Sparkles className="w-3 h-3 text-emerald-500" />
                                 )}
                                 <span>#{index + 1}</span>
+                                {ann.groupId && sortedAnnotations.some(a => a.groupId === ann.groupId && a.id !== ann.id) && (
+                                  <span className="text-xs text-gray-500">+bbox</span>
+                                )}
                                 {ann.confidence !== undefined && (
                                   <span className={`ml-1 text-xs font-medium ${getConfidenceColor(ann.confidence)}`}>
                                     {Math.round(ann.confidence * 100)}%

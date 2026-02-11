@@ -80,3 +80,5 @@ htmlcov/
 *.temp
 .claude
 backend/docs
+# Local scripts
+commit-and-push.sh

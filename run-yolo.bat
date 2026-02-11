@@ -68,4 +68,26 @@ echo.
 echo Close the terminal windows to stop the services
 echo.
 
-pause
+echo Press any key to stop all services...
+pause >nul
+
+echo Stopping services...
+:KILL_LOOP
+set "RUNNING=0"
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000') do (
+    taskkill /F /PID %%a 2>nul
+    set "RUNNING=1"
+)
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :5173') do (
+    taskkill /F /PID %%a 2>nul
+    set "RUNNING=1"
+)
+
+if "%RUNNING%"=="1" (
+    echo Waiting for services to stop...
+    timeout /t 1 /nobreak >nul
+    goto KILL_LOOP
+)
+
+echo Services stopped.
+exit /b 0
