@@ -87,31 +87,19 @@ export function TextPromptPanel({
     if (labelId) {
       const savedPrompt = labelPrompts[labelId] || ''
       setTextPrompt(savedPrompt)
-      console.log(`[TextPrompt] Loaded saved prompt for label ${labelId}:`, savedPrompt)
     }
-  }, [labelId, labelPrompts]) // Load when label ID changes or prompts update
+  }, [labelId]) // Load when label ID changes
 
   // Notify parent of text prompt changes for indicator display
   useEffect(() => {
     onTextPromptChange?.(textPrompt)
   }, [textPrompt, onTextPromptChange])
 
-  // Save text prompt for current label to localStorage whenever it changes
-  useEffect(() => {
-    if (labelId && textPrompt) {
-      const updated = { ...labelPrompts, [labelId]: textPrompt }
-      setLabelPrompts(updated)
-      localStorage.setItem('labelTextPrompts', JSON.stringify(updated))
-      console.log(`[TextPrompt] Auto-saved prompt for label ${labelId}:`, textPrompt)
-    }
-  }, [textPrompt, labelId])
-
-  // Save text prompt for current label to localStorage (manual save)
+  // Save text prompt for current label to localStorage
   const savePromptForLabel = (labelIdToSave: string, prompt: string) => {
     const updated = { ...labelPrompts, [labelIdToSave]: prompt }
     setLabelPrompts(updated)
     localStorage.setItem('labelTextPrompts', JSON.stringify(updated))
-    console.log(`[TextPrompt] Manually saved prompt for label ${labelIdToSave}:`, prompt)
   }
 
   // Reset auto-apply state only when switching away from auto-apply mode
