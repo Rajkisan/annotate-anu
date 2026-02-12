@@ -113,18 +113,20 @@ export function TextPromptPanel({
 
   // Auto-apply mode: Execute prompt when image changes (but only after user has run manually once)
   useEffect(() => {
-    console.log('[AUTO-APPLY] Effect triggered', {
+    const deps = {
       promptMode,
       currentImage: currentImage?.name,
+      currentImageId: currentImage?.id,
       hasRunOnce,
-      textPrompt,
+      textPromptTrimmed: textPrompt.trim(),
       labelId,
       isLoading,
       annotationsCount: currentAnnotations.length
-    })
+    }
+    console.log('[AUTO-APPLY] Effect triggered with deps:', deps)
 
     if (promptMode !== 'auto-apply') {
-      console.log('[AUTO-APPLY] Guard: Not in auto-apply mode')
+      console.log('[AUTO-APPLY] Guard: Not in auto-apply mode (mode=' + promptMode + ')')
       return
     }
     if (!currentImage) {
@@ -167,6 +169,18 @@ export function TextPromptPanel({
 
     const autoExecute = async () => {
       console.log(`[AUTO-APPLY] Starting auto-execute for "${currentImage.name}"`)
+      
+      // Validate blob exists and has size
+      if (!currentImage.blob || currentImage.blob.size === 0) {
+        console.error('[AUTO-APPLY] ERROR: Image blob is missing or empty!', {
+          hasBlob: !!currentImage.blob,
+          size: currentImage.blob?.size || 0
+        })
+        toast.error('Image blob is invalid - cannot process')
+        lastProcessedImageIdRef.current = currentImage.id
+        return
+      }
+
       setIsLoading(true)
       onLoadingChange?.(true) // Notify parent to show dimming effect
       console.log('[AUTO-APPLY] Loading state set to TRUE, dimming overlay should show')
@@ -174,8 +188,9 @@ export function TextPromptPanel({
       try {
         // Convert blob to File
         const imageFile = new File([currentImage.blob], currentImage.name, {
-          type: currentImage.blob.type,
+          type: currentImage.blob.type || 'image/jpeg',
         })
+        console.log(`[AUTO-APPLY] Image file created: ${imageFile.size} bytes, type: ${imageFile.type}`)
 
         console.log(`[AUTO-APPLY] Calling SAM3 API for "${currentImage.name}"...`)
         // Call text prompt API
@@ -364,7 +379,15 @@ export function TextPromptPanel({
           ))
         } else {
           // Use selected annotation type and label - pass imageId for batch processing
-          await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, imageId: image.id })
+          await onAnnotationsCreated({ 
+            boxes, 
+            masks, 
+            scores, 
+            annotationType, 
+            labelId, 
+            imageId: image.id, 
+            createBBoxOverlay: generateBBox 
+          })
 
           setBatchProgress(prev => prev.map((item, idx) =>
             idx === i ? { ...item, status: 'success', count: num_objects } : item

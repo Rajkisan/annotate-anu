@@ -22,6 +22,7 @@ interface BboxPromptPanelProps {
     annotationType: 'bbox' | 'polygon'
     labelId?: string
     imageId?: string
+    createBBoxOverlay?: boolean
   }) => void
   onClose: () => void
   promptBboxes?: Array<{ x: number; y: number; width: number; height: number; id: string; labelId: string }>
@@ -44,6 +45,7 @@ export function BboxPromptPanel({
   const [threshold, setThreshold] = useState(0.5)
   const [maskThreshold, setMaskThreshold] = useState(0.5)
   const [annotationType, setAnnotationType] = useState<AnnotationType>('polygon')
+  const [generateBBox, setGenerateBBox] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
   // Batch mode state
@@ -153,7 +155,8 @@ export function BboxPromptPanel({
             masks,
             scores,
             annotationType,
-            labelId // Pass the label for this group
+            labelId, // Pass the label for this group
+            createBBoxOverlay: generateBBox
           })
         }
       }
@@ -298,7 +301,8 @@ export function BboxPromptPanel({
               scores,
               annotationType,
               labelId,
-              imageId: image.id
+              imageId: image.id,
+              createBBoxOverlay: generateBBox
             })
           }
         }
@@ -471,6 +475,21 @@ export function BboxPromptPanel({
                 </div>
               </div>
             </label>
+
+            {annotationType === 'polygon' && (
+              <div className="ml-7 mt-1 animate-fadeIn">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={generateBBox}
+                    onChange={(e) => setGenerateBBox(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    disabled={isLoading}
+                  />
+                  <span className="text-xs text-gray-700">Also create bounding boxes</span>
+                </label>
+              </div>
+            )}
 
             <label className="flex items-center space-x-3 cursor-pointer">
               <input
