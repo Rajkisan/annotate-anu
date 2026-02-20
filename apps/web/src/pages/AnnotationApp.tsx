@@ -1,23 +1,51 @@
-import { Copy, Download, Loader2, RotateCcw, Trash2, Upload } from 'lucide-react'
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Cloud, CloudOff, Copy, Download, Link as LinkIcon, Loader2, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import toast, { Toaster } from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import '../App.css'
 import Canvas from '../components/Canvas'
 import { ExportModal } from '../components/ExportModal'
 import { LeftSidebar } from '../components/LeftSidebar'
-import Sidebar from '../components/Sidebar'
+import { ModelSelector } from '../components/ModelSelector'
+import { AnnotationsSidebar } from '../components/sidebar'
 import { AIModeIndicator } from '../components/ui/AIModeIndicator'
 import { ColorPickerPopup } from '../components/ui/ColorPickerPopup'
+import { LoadingScreen } from '../components/ui/LoadingScreen'
 import { Modal } from '../components/ui/Modal'
 import ShortcutsHelpModal from '../components/ui/ShortcutsHelpModal'
+import { UnsavedChangesDialog } from '../components/ui/UnsavedChangesDialog'
+import ConfirmationModal from '../components/ConfirmationModal'
 import { useHistory } from '../hooks/useHistory'
+import { useImagePreloader } from '../hooks/useImagePreloader'
+import { useJobStorage } from '../hooks/useJobStorage'
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts'
-import { useStorage } from '../hooks/useStorage'
-import { DEFAULT_LABEL_COLOR, PRESET_COLORS } from '../lib/colors'
-import { isAllowedImageFile, getRelativePath, getDisplayName, ALLOWED_IMAGE_EXTENSIONS, isFolderUploadSupported } from '../lib/file-utils'
+import { useModelRegistry } from '../hooks/useModelRegistry'
+import { imagesApi } from '../lib/api-client'
+import { DEFAULT_LABEL_COLOR } from '../lib/colors'
+import { ALLOWED_IMAGE_EXTENSIONS, getDisplayName, getRelativePath, isAllowedImageFile, isFolderUploadSupported } from '../lib/file-utils'
 import { annotationStorage } from '../lib/storage'
+import { generateUUID } from '../lib/utils'
 import type { Annotation, ImageData, Label, PolygonAnnotation, PromptMode, RectangleAnnotation, Tool } from '../types/annotations'
+import type { DirtyImageInfo } from '../hooks/useAutoSave'
+
+const DEFAULT_APPEARANCE_SETTINGS = {
+  fillOpacity: 0,        // 0-100% default 0% (no fill when unselected)
+  selectedOpacity: 30,   // 0-100% default 30% (fill shown when selected)
+  strokeWidth: 2,        // Stroke/border width in pixels
+  showLabels: false,     // default: hide labels
+  showPolygons: true,
+  showRectangles: true,
+  showHoverTooltips: true,
+  highlightMode: false,  // dim non-annotated areas
+  dimLevel: 'medium' as const,  // light, subtle, medium, strong, very-strong
+  tinyThresholdSettings: {
+    unit: 'percentage' as const,
+    percentageWarning: 2,      // annotations < this % are flagged as warning (amber)
+    percentageCritical: 0.5,   // annotations < this % are flagged as critical (red)
+    pixelsWarning: 2000,       // annotations < this px are flagged as warning
+    pixelsCritical: 500,       // annotations < this px are flagged as critical
+  },
+}
 
 // Thumbnail component to prevent re-creating blob URLs on every render
 interface ImageThumbnailProps {
@@ -26,6 +54,11 @@ interface ImageThumbnailProps {
   annotationCount: number
   onClick: () => void
   onDelete: (e: React.MouseEvent) => void
+  isJobMode?: boolean
+  s3Key?: string
+  dirtyInfo?: DirtyImageInfo // Enhanced dirty state with count and error info
+  isDirty?: boolean // Legacy compatibility
+  thumbnailRef?: (el: HTMLDivElement | null) => void
 }
 
 const ImageThumbnail = ({
@@ -33,18 +66,31 @@ const ImageThumbnail = ({
   isActive,
   onClick,
   onDelete,
-  annotationCount
+  annotationCount,
+  isJobMode = false,
+  s3Key,
+  dirtyInfo,
+  isDirty = false,
+  thumbnailRef,
 }: ImageThumbnailProps) => {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    // Create URL only once when component mounts or image changes
-    const url = URL.createObjectURL(image.blob)
-    setThumbnailUrl(url)
+    // For job mode, use the public job image endpoint
+    if (isJobMode && s3Key && image.jobId && image.jobImageId) {
+      setThumbnailUrl(imagesApi.getImageUrl(s3Key, image.jobId.toString(), image.jobImageId))
+      return
+    }
 
-    // Cleanup: revoke URL when component unmounts or image changes
-    return () => URL.revokeObjectURL(url)
-  }, [image.blob])
+    // For local mode, create blob URL
+    if (image.blob && image.blob.size > 0) {
+      const url = URL.createObjectURL(image.blob)
+      setThumbnailUrl(url)
+
+      // Cleanup: revoke URL when component unmounts or image changes
+      return () => URL.revokeObjectURL(url)
+    }
+  }, [image.blob, isJobMode, s3Key, image.jobId, image.jobImageId])
 
   // Show loading placeholder while URL is being created
   if (!thumbnailUrl) {
@@ -55,23 +101,60 @@ const ImageThumbnail = ({
 
   return (
     <div
+      ref={thumbnailRef}
       onClick={onClick}
       title={image.displayName}
-      className={`group relative flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all ${
+      className={`group relative flex-shrink-0 cursor-pointer rounded overflow-hidden border-3 transition-all ${
         isActive
-          ? 'border-emerald-500 ring-2 ring-emerald-500/50'
+          ? 'border-emerald-400 ring-2 ring-emerald-500/60 shadow-md shadow-emerald-500/30 scale-110'
           : 'border-gray-600 hover:border-gray-500'
       }`}
     >
       <img
         src={thumbnailUrl}
         alt={image.displayName}
-        className="h-20 w-auto object-contain bg-gray-900"
+        className="h-20 w-20 object-cover bg-gray-900"
       />
       {annotationCount > 0 && (
         <div className="absolute top-1 right-1 bg-emerald-600 text-white text-xs px-1.5 py-0.5 rounded">
           {annotationCount}
         </div>
+      )}
+      {/* Enhanced dirty indicator with count and error state */}
+      {(dirtyInfo || isDirty) && (
+        <>
+          {dirtyInfo ? (
+            // Enhanced badge system
+            <>
+              {dirtyInfo.hasError ? (
+                // Error state: Red exclamation badge
+                <div
+                  className="absolute top-1 right-8 w-5 h-5 bg-red-500 rounded-full border border-gray-900 flex items-center justify-center"
+                  title={`Sync error - ${dirtyInfo.count} unsaved change${dirtyInfo.count !== 1 ? 's' : ''}`}
+                >
+                  <span className="text-white text-xs font-bold">!</span>
+                </div>
+              ) : dirtyInfo.count > 5 ? (
+                // 6+ changes: Badge with number
+                <div
+                  className="absolute top-1 right-8 bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full border border-gray-900 font-medium"
+                  title={`${dirtyInfo.count} unsaved changes`}
+                >
+                  {dirtyInfo.count}
+                </div>
+              ) : (
+                // 1-5 changes: Orange dot
+                <div
+                  className="absolute top-1 right-8 w-2.5 h-2.5 bg-orange-500 rounded-full border border-gray-900"
+                  title={`${dirtyInfo.count} unsaved change${dirtyInfo.count !== 1 ? 's' : ''}`}
+                />
+              )}
+            </>
+          ) : (
+            // Legacy fallback: Simple orange dot
+            <div className="absolute top-1 right-8 w-2.5 h-2.5 bg-orange-500 rounded-full border border-gray-900" title="Unsaved changes" />
+          )}
+        </>
       )}
       <button
         onClick={onDelete}
@@ -85,8 +168,13 @@ const ImageThumbnail = ({
 }
 
 function AnnotationApp() {
+  const navigate = useNavigate()
+  const search = useSearch({ strict: false }) as { jobId?: string; imageId?: string }
+  const jobId = search.jobId || null
+  const imageIdParam = search.imageId || null
+
   const [selectedTool, setSelectedTool] = useState<Tool>('select')
-  const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null)
+  const [selectedAnnotations, setSelectedAnnotations] = useState<string[]>([])
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null)
   const [showLabelManager, setShowLabelManager] = useState(false)
   const [showExportModal, setShowExportModal] = useState(false)
@@ -98,7 +186,11 @@ function AnnotationApp() {
     toolConfig: true,
     images: false,
   })
+
+  // BYOM model registry - initialized after storage to get allowedModelIds
+  // (actual call moved after useJobStorage)
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(false)
+  const [isGalleryCollapsed, setIsGalleryCollapsed] = useState(false) // Open by default
   const [promptBboxes, setPromptBboxes] = useState<Array<{ x: number; y: number; width: number; height: number; id: string; labelId: string }>>([])
   const [isBboxPromptMode, setIsBboxPromptMode] = useState(false)
   const [isAIPanelActive, setIsAIPanelActive] = useState(false)
@@ -113,6 +205,8 @@ function AnnotationApp() {
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const colorButtonRef = useRef<HTMLButtonElement>(null)
+  const thumbnailRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const thumbnailsContainerRef = useRef<HTMLDivElement>(null)
 
   // Orphan recovery modal state
   const [showOrphanRecoveryModal, setShowOrphanRecoveryModal] = useState(false)
@@ -124,10 +218,58 @@ function AnnotationApp() {
   const [labelToDelete, setLabelToDelete] = useState<{ id: string; name: string; count: number } | null>(null)
   const [deleteReassignTarget, setDeleteReassignTarget] = useState<string | null>(null)
 
+  // Unsaved changes dialog state (for navigation guard)
+  const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false)
+  const pendingNavigationRef = useRef<(() => void) | null>(null)
+
+  // Keyboard delete confirmation state
+  const [showKeyboardDeleteConfirm, setShowKeyboardDeleteConfirm] = useState(false)
+
   // Zoom and pan state
   const [zoomLevel, setZoomLevel] = useState(1)
   const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 })
 
+  // Appearance settings for annotations (persisted to localStorage)
+  const [appearanceSettings, setAppearanceSettings] = useState(() => {
+    const saved = localStorage.getItem('annotationAppearanceSettings')
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+
+        // Migration: old tinyThreshold (single number) to new structure
+        if (typeof parsed.tinyThreshold === 'number' && !parsed.tinyThresholdSettings) {
+          parsed.tinyThresholdSettings = {
+            unit: 'percentage',
+            percentageWarning: parsed.tinyThreshold,
+            percentageCritical: parsed.tinyThreshold / 4,
+            pixelsWarning: 2000,
+            pixelsCritical: 500,
+          }
+          delete parsed.tinyThreshold
+        }
+
+        // Migration: old warningThreshold/criticalThreshold to new per-unit structure
+        if (parsed.tinyThresholdSettings && 'warningThreshold' in parsed.tinyThresholdSettings) {
+          const old = parsed.tinyThresholdSettings
+          parsed.tinyThresholdSettings = {
+            unit: old.unit || 'percentage',
+            percentageWarning: old.unit === 'percentage' ? old.warningThreshold : 2,
+            percentageCritical: old.unit === 'percentage' ? old.criticalThreshold : 0.5,
+            pixelsWarning: old.unit === 'pixels' ? old.warningThreshold : 2000,
+            pixelsCritical: old.unit === 'pixels' ? old.criticalThreshold : 500,
+          }
+        }
+
+        return { ...DEFAULT_APPEARANCE_SETTINGS, ...parsed }
+      } catch {
+        // Invalid JSON, use defaults
+      }
+    }
+    return DEFAULT_APPEARANCE_SETTINGS
+  })
+
+  // Use job-aware storage (falls back to local storage if no jobId)
+  const storage = useJobStorage(jobId)
   const {
     images,
     labels,
@@ -142,6 +284,7 @@ function AnnotationApp() {
     addAnnotation,
     addManyAnnotations,
     updateAnnotation,
+    updateManyAnnotations,
     removeAnnotation,
     removeManyAnnotations,
     bulkToggleAnnotationVisibility,
@@ -149,7 +292,31 @@ function AnnotationApp() {
     updateLabel,
     removeLabel,
     resetAll,
-  } = useStorage()
+    // Job mode specific
+    isJobMode,
+    autoSaveConfig,
+    setAutoSaveConfig,
+    syncStatus,
+    pendingCount,
+    isOnline,
+    syncNow,
+    dirtyImageIds, // Legacy
+    dirtyImageInfo, // Enhanced
+    // syncHistory, // Sync history
+    allowedModelIds, // BYOM - project allowed models
+    // Lazy loading state
+    loadingProgress,
+    annotationsLoadedFor,
+  } = storage
+
+  // BYOM model registry - filter by project's allowed models in job mode
+  const { allModels, selectedModel, selectModel, refreshModels, isNotConfigured } = useModelRegistry(allowedModelIds)
+
+  // Image preloader for smooth navigation
+  const { preloadWindow, getCachedImage } = useImagePreloader(images, {
+    windowSize: 2,
+    priorityLoad: true
+  })
 
   // History for undo/redo
   const { recordChange, undo, redo, canUndo, canRedo } = useHistory(currentImageId)
@@ -164,10 +331,61 @@ function AnnotationApp() {
     }
   }, [labels, selectedLabelId])
 
+  // Track if images have been loaded and initialized
+  const imagesInitializedRef = useRef(false)
+
+  // Navigate to specific image when imageId URL parameter is present (on initial load)
+  useEffect(() => {
+    if (images.length > 0 && isJobMode && !loading && !imagesInitializedRef.current) {
+      imagesInitializedRef.current = true
+      // If imageId param exists and image is found, navigate to it
+      if (imageIdParam) {
+        const targetImage = images.find(img => img.id === imageIdParam)
+        if (targetImage) {
+          setCurrentImageId(imageIdParam)
+        }
+      }
+    }
+  }, [imageIdParam, images, isJobMode, loading, setCurrentImageId])
+
+  // Preload images when current image changes (for smooth navigation)
+  useEffect(() => {
+    if (currentImageId && images.length > 0) {
+      const currentIndex = images.findIndex(img => img.id === currentImageId)
+      if (currentIndex !== -1) {
+        // Preload window around current image (non-blocking)
+        preloadWindow(currentIndex, images).catch(err => {
+          console.error('[AnnotationApp] Preload failed:', err)
+        })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImageId, images])
+
+  // Sync URL when current image changes (for navigation)
+  useEffect(() => {
+    if (isJobMode && currentImageId && jobId && imagesInitializedRef.current) {
+      if (search.imageId !== currentImageId) {
+        navigate({
+          search: (prev: any) => ({
+            ...prev,
+            imageId: currentImageId,
+          }),
+          replace: true,
+        } as any)
+      }
+    }
+  }, [isJobMode, currentImageId, jobId, search.imageId, navigate])
+
   // Persist prompt mode to localStorage
   useEffect(() => {
     localStorage.setItem('promptMode', promptMode)
   }, [promptMode])
+
+  // Persist appearance settings to localStorage
+  useEffect(() => {
+    localStorage.setItem('annotationAppearanceSettings', JSON.stringify(appearanceSettings))
+  }, [appearanceSettings])
 
   // Detect orphaned annotations on load
   useEffect(() => {
@@ -180,6 +398,52 @@ function AnnotationApp() {
       }
     }
   }, [annotations, labels, loading, showOrphanRecoveryModal])
+
+  /**
+   * Handle back navigation with unsaved changes check
+   */
+  const handleBackNavigation = () => {
+    if (pendingCount > 0) {
+      // Store the navigation action to execute after user confirms
+      pendingNavigationRef.current = () => window.history.back()
+      setShowUnsavedChangesDialog(true)
+    } else {
+      window.history.back()
+    }
+  }
+
+  /**
+   * Handle save and leave action from unsaved changes dialog
+   */
+  const handleSaveAndLeave = async () => {
+    if (syncNow) {
+      await syncNow()
+    }
+    setShowUnsavedChangesDialog(false)
+    if (pendingNavigationRef.current) {
+      pendingNavigationRef.current()
+      pendingNavigationRef.current = null
+    }
+  }
+
+  /**
+   * Handle discard changes action from unsaved changes dialog
+   */
+  const handleDiscardAndLeave = () => {
+    setShowUnsavedChangesDialog(false)
+    if (pendingNavigationRef.current) {
+      pendingNavigationRef.current()
+      pendingNavigationRef.current = null
+    }
+  }
+
+  /**
+   * Handle cancel action from unsaved changes dialog
+   */
+  const handleCancelNavigation = () => {
+    setShowUnsavedChangesDialog(false)
+    pendingNavigationRef.current = null
+  }
 
   const handleImageUpload = async (files: FileList) => {
     const filesArray = Array.from(files)
@@ -371,29 +635,25 @@ function AnnotationApp() {
     }
   }
 
+  const handleUpdateManyAnnotations = async (annotationsToUpdate: Annotation[]) => {
+    console.log('[APP] handleUpdateManyAnnotations called for', annotationsToUpdate.length, 'annotations')
+    const updatedAnnotations = annotationsToUpdate.map(ann => ({
+      ...ann,
+      updatedAt: Date.now(),
+    }))
+    await updateManyAnnotations(updatedAnnotations)
+    console.log('[APP] updateManyAnnotations completed')
+    // Record history after user action (not during undo/redo)
+    if (!isUndoingRef.current) {
+      const updateMap = new Map(updatedAnnotations.map(a => [a.id, a]))
+      recordChange(currentAnnotations.map(a => updateMap.has(a.id) ? updateMap.get(a.id)! : a))
+    }
+  }
+
   const handleDeleteAnnotation = async (id: string) => {
-    const annotation = annotations.find(a => a.id === id)
-    if (!annotation) {
-      await removeAnnotation(id)
-      return
-    }
-
-    // Find all annotations in the same group (if grouped)
-    const annotationsToDelete = annotation.groupId
-      ? annotations.filter(a => a.groupId === annotation.groupId).map(a => a.id)
-      : [id]
-
-    // Delete all annotations in the group
-    if (annotationsToDelete.length > 1) {
-      await removeManyAnnotations(annotationsToDelete)
-    } else {
-      await removeAnnotation(id)
-    }
-
-    if (selectedAnnotation && annotationsToDelete.includes(selectedAnnotation)) {
-      setSelectedAnnotation(null)
-    }
-
+    await removeAnnotation(id)
+    // Remove from selection if it was selected
+    setSelectedAnnotations(prev => prev.filter(selectedId => selectedId !== id))
     // Record history after user action (not during undo/redo)
     if (!isUndoingRef.current) {
       recordChange(currentAnnotations.filter(a => !annotationsToDelete.includes(a.id)))
@@ -402,9 +662,8 @@ function AnnotationApp() {
 
   const handleBulkDeleteAnnotations = async (ids: string[]) => {
     await removeManyAnnotations(ids)
-    if (selectedAnnotation && ids.includes(selectedAnnotation)) {
-      setSelectedAnnotation(null)
-    }
+    // Remove deleted annotations from selection
+    setSelectedAnnotations(prev => prev.filter(selectedId => !ids.includes(selectedId)))
     // Record history after user action (not during undo/redo)
     if (!isUndoingRef.current) {
       recordChange(currentAnnotations.filter(a => !ids.includes(a.id)))
@@ -414,16 +673,64 @@ function AnnotationApp() {
   // Annotation bulk operation handlers
   const handleBulkChangeLabel = async (annotationIds: string[], newLabelId: string) => {
     try {
-      await annotationStorage.bulkChangeLabel(annotationIds, newLabelId)
+      // Get the annotations that need to be updated
+      const annotationsToUpdate = annotations
+        .filter(a => annotationIds.includes(a.id))
+        .map(a => ({
+          ...a,
+          labelId: newLabelId,
+          updatedAt: Date.now(),
+        }))
 
-      // Reload annotations via useStorage reload
-      window.location.reload() // Temporary - ideally update state directly
+      // Update state directly without page reload
+      await updateManyAnnotations(annotationsToUpdate)
 
       const label = labels.find(l => l.id === newLabelId)
       toast.success(`${annotationIds.length} annotation(s) moved to "${label?.name}"`)
     } catch (error) {
       console.error('Failed to change labels:', error)
       toast.error('Failed to change labels')
+    }
+  }
+
+  // Single annotation label change handler (for inline editing in table)
+  const handleLabelChange = async (annotationId: string, newLabelId: string) => {
+    try {
+      const annotation = annotations.find(a => a.id === annotationId)
+      if (!annotation) return
+
+      const updatedAnnotation = {
+        ...annotation,
+        labelId: newLabelId,
+        updatedAt: Date.now(),
+      }
+
+      await updateAnnotation(updatedAnnotation)
+    } catch (error) {
+      console.error('Failed to change label:', error)
+      toast.error('Failed to change label')
+    }
+  }
+
+  const handleUpdateAnnotationAttributes = async (
+    annotationId: string,
+    attributes: Record<string, string | number | boolean>
+  ) => {
+    try {
+      const annotation = annotations.find(a => a.id === annotationId)
+      if (!annotation) return
+
+      const updatedAnnotation = {
+        ...annotation,
+        attributes,
+        updatedAt: Date.now(),
+      }
+
+      await updateAnnotation(updatedAnnotation)
+      toast.success('Attributes updated')
+    } catch (error) {
+      console.error('Failed to update attributes:', error)
+      toast.error('Failed to update attributes')
     }
   }
 
@@ -552,93 +859,68 @@ function AnnotationApp() {
     scores: number[]
     annotationType: 'bbox' | 'polygon'
     labelId?: string
+    labelIds?: string[] // per-detection label IDs (from label mapping)
     imageId?: string
-    createBBoxOverlay?: boolean
+    modelId?: string
   }) => {
     // Use passed imageId for batch processing, otherwise use currentImageId
     const targetImageId = results.imageId || currentImageId
     if (!targetImageId) return
 
-    // Use the labelId from results if provided, otherwise use selectedLabelId
-    const labelToUse = results.labelId || selectedLabelId
-    if (!labelToUse) return
+    // Fallback label for detections without per-detection labelIds
+    const fallbackLabel = results.labelId || selectedLabelId
 
     const now = Date.now()
     const annotationsToAdd: Annotation[] = []
 
-    // If bbox requested (explicit bbox mode OR polygon mode with overlay)
-    if (results.annotationType === 'bbox' || (results.annotationType === 'polygon' && results.createBBoxOverlay)) {
-      // Create rectangle annotations from bounding boxes
+    if (results.annotationType === 'bbox') {
       for (let i = 0; i < results.boxes.length; i++) {
-        const groupId = results.createBBoxOverlay ? `${now}-group-${i}` : undefined
-        
-        let x1: number, y1: number, x2: number, y2: number
-        
-        // If creating bbox overlay with polygon, compute bbox from polygon coordinates to ensure full coverage
-        if (results.createBBoxOverlay && results.masks[i] && results.masks[i].polygons.length > 0) {
-          const polygonCoords = results.masks[i].polygons[0]
-          const xCoords = polygonCoords.map(([x]) => x)
-          const yCoords = polygonCoords.map(([, y]) => y)
-          x1 = Math.min(...xCoords)
-          y1 = Math.min(...yCoords)
-          x2 = Math.max(...xCoords)
-          y2 = Math.max(...yCoords)
-        } else {
-          // Use API-provided boxes for pure bbox mode
-          [x1, y1, x2, y2] = results.boxes[i]
-        }
+        const labelForDetection = results.labelIds?.[i] || fallbackLabel
+        if (!labelForDetection) continue
 
-        // Convert from [x1, y1, x2, y2] to [x, y, width, height]
-        const x = x1
-        const y = y1
-        const width = x2 - x1
-        const height = y2 - y1
+        const [x1, y1, x2, y2] = results.boxes[i]
 
         const annotation: RectangleAnnotation = {
-          id: `${now}-box-${i}`,
+          id: generateUUID(),
           imageId: targetImageId,
-          labelId: labelToUse,
+          labelId: labelForDetection,
           type: 'rectangle',
-          x,
-          y,
-          width,
-          height,
+          x: x1,
+          y: y1,
+          width: x2 - x1,
+          height: y2 - y1,
           createdAt: now,
           updatedAt: now,
           confidence: results.scores[i],
           isAutoGenerated: true,
-          groupId,
+          source: results.modelId ? `model:${results.modelId}` : 'manual',
         }
 
         annotationsToAdd.push(annotation)
       }
-    }
-
-    // If polygon requested
-    if (results.annotationType === 'polygon') {
-      // Create polygon annotations from masks
+    } else {
       for (let i = 0; i < results.masks.length; i++) {
+        const labelForDetection = results.labelIds?.[i] || fallbackLabel
+        if (!labelForDetection) continue
+
         const mask = results.masks[i]
         const groupId = results.createBBoxOverlay ? `${now}-group-${i}` : undefined
 
-        // Use the first polygon from the mask (SAM3 can return multiple polygons per mask)
         if (mask.polygons.length > 0) {
           const polygonCoords = mask.polygons[0]
-
-          // Convert from [x, y] tuples to {x, y} objects
           const points = polygonCoords.map(([x, y]) => ({ x, y }))
 
           const annotation: PolygonAnnotation = {
-            id: `${now}-poly-${i}`,
+            id: generateUUID(),
             imageId: targetImageId,
-            labelId: labelToUse,
+            labelId: labelForDetection,
             type: 'polygon',
             points,
             createdAt: now,
             updatedAt: now,
             confidence: results.scores[i],
             isAutoGenerated: true,
-            groupId,
+            source: results.modelId ? `model:${results.modelId}` : 'manual',
           }
 
           annotationsToAdd.push(annotation)
@@ -647,12 +929,11 @@ function AnnotationApp() {
     }
 
     // Batch add all annotations in a single transaction for better performance
-    // This updates both IndexedDB AND React state
     if (annotationsToAdd.length > 0) {
       await addManyAnnotations(annotationsToAdd)
     }
 
-    // Record history after AI annotations are created (no delay needed with batch operation)
+    // Record history after AI annotations are created
     if (!isUndoingRef.current && currentImageId) {
       recordChange(annotations.filter(a => a.imageId === (results.imageId || currentImageId)))
     }
@@ -663,20 +944,69 @@ function AnnotationApp() {
 
   useEffect(() => {
     if (currentImage) {
-      const url = URL.createObjectURL(currentImage.blob)
-      setCurrentImageUrl(url)
-      return () => URL.revokeObjectURL(url)
+      // In job mode, use API URL for full-size image (blob is empty placeholder)
+      if (isJobMode && currentImage.s3Key && currentImage.jobId && currentImage.jobImageId) {
+        const apiUrl = imagesApi.getFullImageUrl(
+          currentImage.s3Key,
+          currentImage.jobId.toString(),
+          currentImage.jobImageId
+        )
+        setCurrentImageUrl(apiUrl)
+        // No cleanup needed for API URLs
+        return
+      }
+
+      // For local mode, create blob URL from file
+      if (currentImage.blob && currentImage.blob.size > 0) {
+        const url = URL.createObjectURL(currentImage.blob)
+        setCurrentImageUrl(url)
+        return () => URL.revokeObjectURL(url)
+      }
+
+      // Fallback: no valid image source
+      setCurrentImageUrl(null)
     } else {
       setCurrentImageUrl(null)
     }
     // Clear selection when image changes
-    setSelectedAnnotation(null)
-  }, [currentImage])
+    setSelectedAnnotations([])
+  }, [currentImage, isJobMode])
+
 
   // Clear selection when navigating between images
   useEffect(() => {
-    setSelectedAnnotation(null)
+    setSelectedAnnotations([])
   }, [currentImageId])
+
+  // Auto-scroll to center the current image in gallery
+  useEffect(() => {
+    if (currentImageId && !isGalleryCollapsed) {
+      // Small delay to ensure DOM has updated and refs are set
+      const timer = setTimeout(() => {
+        const thumbnailElement = thumbnailRefs.current.get(currentImageId)
+        const container = thumbnailsContainerRef.current
+
+        if (thumbnailElement && container) {
+          // Calculate the position to center the thumbnail in the container
+          const thumbnailRect = thumbnailElement.getBoundingClientRect()
+          const containerRect = container.getBoundingClientRect()
+
+          // Calculate scroll position to center the thumbnail
+          const thumbnailCenter = thumbnailElement.offsetLeft + (thumbnailRect.width / 2)
+          const containerCenter = containerRect.width / 2
+          const scrollPosition = thumbnailCenter - containerCenter
+
+          // Smooth scroll to the calculated position
+          container.scrollTo({
+            left: scrollPosition,
+            behavior: 'smooth'
+          })
+        }
+      }, 100)
+
+      return () => clearTimeout(timer)
+    }
+  }, [currentImageId, isGalleryCollapsed])
 
   // Clear prompt bboxes when changing images to avoid confusion
   useEffect(() => {
@@ -825,34 +1155,48 @@ function AnnotationApp() {
     }
   }, [currentImageId]) // Only on image change, not on every annotation change
 
-  // Copy filename to clipboard
-  const copyFilenameToClipboard = async () => {
-    if (currentImage) {
-      try {
-        // Check if clipboard API is available
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(currentImage.name)
-          toast.success('Filename copied to clipboard!')
-        } else {
-          // Fallback for browsers without clipboard API
-          const textArea = document.createElement('textarea')
-          textArea.value = currentImage.name
-          textArea.style.position = 'fixed'
-          textArea.style.left = '-999999px'
-          document.body.appendChild(textArea)
-          textArea.select()
-          try {
-            document.execCommand('copy')
-            toast.success('Filename copied to clipboard!')
-          } catch (err) {
-            toast.error('Failed to copy to clipboard')
-          }
-          document.body.removeChild(textArea)
-        }
-      } catch (error) {
-        toast.error('Failed to copy to clipboard')
-        console.error('Clipboard error:', error)
+  // Copy annotation link to clipboard
+  const copyAnnotationLinkToClipboard = async () => {
+    if (!currentImageId) {
+      toast.error('No image selected')
+      return
+    }
+
+    try {
+      // Build full URL with domain and quoted parameters
+      const params: string[] = []
+
+      if (jobId) {
+        params.push(`jobId="${jobId}"`)
       }
+      params.push(`imageId="${currentImageId}"`)
+
+      const queryString = params.length > 0 ? '?' + params.join('&') : ''
+      const fullUrl = `${window.location.origin}/annotation${queryString}`
+
+      // Check if clipboard API is available
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(fullUrl)
+        toast.success('Annotation link copied to clipboard!')
+      } else {
+        // Fallback for browsers without clipboard API
+        const textArea = document.createElement('textarea')
+        textArea.value = fullUrl
+        textArea.style.position = 'fixed'
+        textArea.style.left = '-999999px'
+        document.body.appendChild(textArea)
+        textArea.select()
+        try {
+          document.execCommand('copy')
+          toast.success('Annotation link copied to clipboard!')
+        } catch (err) {
+          toast.error('Failed to copy to clipboard')
+        }
+        document.body.removeChild(textArea)
+      }
+    } catch (error) {
+      toast.error('Failed to copy to clipboard')
+      console.error('Clipboard error:', error)
     }
   }
 
@@ -861,8 +1205,9 @@ function AnnotationApp() {
     onSelectTool: setSelectedTool,
     selectedTool,
     onDelete: () => {
-      if (selectedAnnotation) {
-        handleDeleteAnnotation(selectedAnnotation)
+      // Show confirmation dialog before deleting
+      if (selectedAnnotations.length > 0) {
+        setShowKeyboardDeleteConfirm(true)
       }
     },
     onDuplicate: () => {
@@ -900,32 +1245,69 @@ function AnnotationApp() {
     onToggleSidebar: () => setIsRightSidebarCollapsed(prev => !prev),
   })
 
-  if (loading) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-gray-900">
-        <div className="text-white text-lg">Loading...</div>
-      </div>
-    )
-  }
+  // Get preloaded image for current image
+  const preloadedImage = currentImage
+    ? getCachedImage(currentImage.id)
+    : null
+
+  // Show LoadingScreen during critical loading phase
+  const showLoadingScreen = loading || loadingProgress.phase === 'loading-critical'
 
   return (
+    <>
+      <LoadingScreen
+        isVisible={showLoadingScreen}
+        message={loadingProgress.currentStep}
+        current={loadingProgress.current}
+        total={loadingProgress.total}
+        percentage={loadingProgress.percentage}
+        subProgress={loadingProgress.subProgress}
+      />
+
+      {!showLoadingScreen && (
     <div className="h-screen flex flex-col bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className="flex items-center gap-2 hover:opacity-90 transition-opacity group"
-            title="Return to home"
-            aria-label="AnnotateANU - Return to home"
-          >
-            <img
-              src="/logo.png"
-              alt="AnnotateANU"
-              className="h-10 w-10 transition-transform group-hover:scale-105"
-            />
-            <span className="text-xl font-bold text-emerald-600">AnnotateANU</span>
-          </Link>
+          {isJobMode ? (
+            // Job mode: Back button - swaps logo for back arrow on hover
+            <button
+              onClick={handleBackNavigation}
+              className="relative h-10 min-w-[180px] flex items-center group"
+              title="Back to job list"
+              aria-label="Back to job list"
+            >
+              {/* Default state: Logo + AnnotateANU */}
+              <div className="absolute inset-0 flex items-center gap-2 group-hover:opacity-0 transition-opacity duration-150">
+                <img
+                  src="/logo.png"
+                  alt="AnnotateANU"
+                  className="h-10 w-10"
+                />
+                <span className="text-xl font-bold text-emerald-600">AnnotateANU</span>
+              </div>
+              {/* Hover state: Back arrow + text */}
+              <div className="absolute inset-0 flex items-center gap-2 text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                <ArrowLeft className="w-5 h-5" />
+                <span className="text-lg font-semibold">Back</span>
+              </div>
+            </button>
+          ) : (
+            // Solo mode: Link to home page
+            <Link
+              to="/"
+              className="flex items-center gap-2 hover:opacity-90 transition-opacity group"
+              title="Return to home"
+              aria-label="AnnotateANU - Return to home"
+            >
+              <img
+                src="/logo.png"
+                alt="AnnotateANU"
+                className="h-10 w-10 transition-transform group-hover:scale-105"
+              />
+              <span className="text-xl font-bold text-emerald-600">AnnotateANU</span>
+            </Link>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {images.length > 0 && (
@@ -933,6 +1315,83 @@ function AnnotationApp() {
               Image {currentImageNumber} of {images.length} • {currentAnnotations.length} annotations
             </span>
           )}
+
+          {/* Job Mode: Sync Status and Auto-save Settings */}
+          {isJobMode && (
+            <div className="flex items-center gap-3 px-3 py-1.5 glass rounded-lg border border-gray-200">
+              {/* Online/Offline indicator */}
+              {isOnline ? (
+                <Cloud className="w-4 h-4 text-emerald-600" />
+              ) : (
+                <CloudOff className="w-4 h-4 text-amber-600" />
+              )}
+
+              {/* Sync status */}
+              <div className="flex items-center gap-1.5">
+                {syncStatus === 'syncing' && (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                    <span className="text-xs text-blue-600">Saving...</span>
+                  </>
+                )}
+                {syncStatus === 'success' && (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-xs text-emerald-600">Saved</span>
+                  </>
+                )}
+                {syncStatus === 'error' && (
+                  <span className="text-xs text-red-600">Save failed</span>
+                )}
+                {syncStatus === 'idle' && pendingCount > 0 && (
+                  <span className="text-xs text-gray-500">{pendingCount} pending</span>
+                )}
+                {syncStatus === 'idle' && pendingCount === 0 && (
+                  <span className="text-xs text-gray-500">Up to date</span>
+                )}
+              </div>
+
+              {/* Auto-save interval selector */}
+              <select
+                value={autoSaveConfig?.intervalMs ?? 5000}
+                onChange={(e) => setAutoSaveConfig?.({
+                  ...autoSaveConfig!,
+                  intervalMs: parseInt(e.target.value),
+                })}
+                className="text-xs bg-white border border-gray-200 rounded px-1.5 py-0.5 text-gray-700 focus:outline-none focus:border-emerald-500"
+                title="Auto-save interval"
+              >
+                <option value="3000">3s</option>
+                <option value="5000">5s</option>
+                <option value="10000">10s</option>
+                <option value="30000">30s</option>
+                <option value="60000">1m</option>
+              </select>
+
+              {/* Manual sync button */}
+              {pendingCount > 0 && (
+                <button
+                  onClick={syncNow}
+                  disabled={syncStatus === 'syncing'}
+                  className="text-xs px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white rounded transition-colors"
+                >
+                  Sync Now
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Model Selector */}
+          {/* Hide Manage Models in job mode - models are managed at project level */}
+          <ModelSelector
+            selectedModel={selectedModel}
+            allModels={allModels}
+            onSelectModel={selectModel}
+            onOpenSettings={isJobMode ? undefined : () => navigate({ to: '/dashboard/models' })}
+            onRefresh={isNotConfigured ? undefined : refreshModels}
+            isNotConfigured={isNotConfigured}
+          />
+
           <button
             onClick={() => setShowExportModal(true)}
             disabled={annotations.length === 0}
@@ -950,21 +1409,23 @@ function AnnotationApp() {
             <RotateCcw className="w-4 h-4" />
             Reset
           </button>
-          <button
-            onClick={() => setShowLabelManager(true)}
-            className="px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-sm rounded transition-colors"
-            title="Create, edit, and delete labels"
-          >
-            Manage Labels
-          </button>
+          {/* Hide Manage Labels in job mode - labels are managed at project level */}
+          {!isJobMode && (
+            <button
+              onClick={() => setShowLabelManager(true)}
+              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-sm rounded transition-colors"
+              title="Create, edit, and delete labels"
+            >
+              Manage Labels
+            </button>
+          )}
         </div>
       </header>
 
       {/* Main Layout */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left Sidebar */}
-          <LeftSidebar
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Sidebar */}
+        <LeftSidebar
             selectedTool={selectedTool}
             onToolChange={setSelectedTool}
             labels={labels}
@@ -972,6 +1433,7 @@ function AnnotationApp() {
             onSelectLabel={setSelectedLabelId}
             currentImage={currentImage || null}
             images={images}
+            allAnnotations={annotations}
             promptMode={promptMode}
             setPromptMode={setPromptMode}
             onAnnotationsCreated={handleAutoAnnotateResults}
@@ -990,31 +1452,55 @@ function AnnotationApp() {
             canUndo={canUndo}
             canRedo={canRedo}
             onShowShortcuts={() => setShowShortcutsModal(true)}
+            selectedModel={selectedModel}
           />
 
           {/* Canvas */}
-          <div className="flex-1 bg-white overflow-hidden flex flex-col border-x border-gray-200">
+          <div className="flex-1 bg-white flex flex-col border-x border-gray-200 overflow-visible">
             {/* Image Viewer Header */}
             {currentImage && (
-              <div className="glass border-b border-gray-200 px-4 py-2 flex items-center justify-between">
+              <div className="glass border-b border-gray-200 px-4 py-2 flex items-center justify-between overflow-visible">
+                {/* Left: Image info */}
                 <div className="flex items-center gap-3">
                   <span className="text-emerald-600 font-semibold">
                     {currentImageNumber} / {images.length}
                   </span>
                   <span className="text-gray-400 text-sm">|</span>
-                  <span className="text-gray-900 text-sm font-mono">{currentImage.displayName}</span>
-                  <button
-                    onClick={copyFilenameToClipboard}
-                    className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-600 hover:text-gray-900"
-                    title="Copy filename to clipboard"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="flex flex-col items-end gap-1">
                   <div className="text-gray-600 text-xs">
                     {currentImage.width} × {currentImage.height} px
                   </div>
+                </div>
+
+                {/* Center: Navigation with filename */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={goToPreviousImage}
+                    disabled={currentImageIndex === 0}
+                    className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    title="Previous image (Left Arrow)"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-gray-900 text-sm font-mono">{currentImage.displayName}</span>
+                  <button
+                    onClick={copyAnnotationLinkToClipboard}
+                    className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-600 hover:text-gray-900"
+                    title="Copy annotation link"
+                  >
+                    <LinkIcon className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={goToNextImage}
+                    disabled={currentImageIndex === images.length - 1}
+                    className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    title="Next image (Right Arrow)"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Right: AI Mode Indicator */}
+                <div className="overflow-visible">
                   <AIModeIndicator
                     mode={promptMode}
                     isActive={isAIPanelActive}
@@ -1028,19 +1514,35 @@ function AnnotationApp() {
             <div className="flex-1 overflow-hidden relative">
               <Canvas
                 image={currentImageUrl}
+                preloadedImage={preloadedImage || undefined}
                 selectedTool={selectedTool}
                 annotations={currentAnnotations}
                 labels={labels}
                 selectedLabelId={selectedLabelId}
                 onAddAnnotation={handleAddAnnotation}
                 onUpdateAnnotation={handleUpdateAnnotation}
-                selectedAnnotation={selectedAnnotation}
-                onSelectAnnotation={setSelectedAnnotation}
+                onUpdateManyAnnotations={handleUpdateManyAnnotations}
+                selectedAnnotations={selectedAnnotations}
+                onSelectAnnotations={setSelectedAnnotations}
                 promptBboxes={promptBboxes}
                 zoomLevel={zoomLevel}
                 onZoomChange={setZoomLevel}
                 stagePosition={stagePosition}
                 onStagePositionChange={setStagePosition}
+                pendingChanges={currentImageId ? (dirtyImageInfo?.get(currentImageId)?.count || 0) : 0}
+                hasError={currentImageId ? (dirtyImageInfo?.get(currentImageId)?.hasError || false) : false}
+                fillOpacity={appearanceSettings.fillOpacity / 100}
+                selectedOpacity={appearanceSettings.selectedOpacity / 100}
+                strokeWidth={appearanceSettings.strokeWidth}
+                showLabels={appearanceSettings.showLabels}
+                showPolygons={appearanceSettings.showPolygons}
+                showRectangles={appearanceSettings.showRectangles}
+                showHoverTooltips={appearanceSettings.showHoverTooltips}
+                highlightMode={appearanceSettings.highlightMode}
+                dimLevel={appearanceSettings.dimLevel}
+                onDeleteAnnotation={handleDeleteAnnotation}
+                onLabelChange={handleLabelChange}
+                onUpdateAnnotationAttributes={handleUpdateAnnotationAttributes}
               />
               {/* Auto-apply loading overlay */}
               {isAutoApplyLoading && (
@@ -1052,136 +1554,205 @@ function AnnotationApp() {
                 </div>
               )}
             </div>
+
+            {/* Image Gallery - Collapsible Bottom strip */}
+            <div className={`glass border-t border-gray-200 transition-all duration-200 ${isGalleryCollapsed ? 'h-8' : 'h-32'}`}>
+              {/* Gallery Header - Always visible */}
+              <button
+                onClick={() => setIsGalleryCollapsed(prev => !prev)}
+                className="w-full h-8 px-4 flex items-center justify-between hover:bg-gray-100/50 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <svg
+                    className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isGalleryCollapsed ? '' : 'rotate-180'}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                  <span className="text-xs font-medium text-gray-600">
+                    Image Gallery
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    ({images.length} images)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {currentImage && (
+                    <span className="text-xs text-emerald-600 font-medium">
+                      {currentImageNumber} / {images.length}
+                    </span>
+                  )}
+                </div>
+              </button>
+
+              {/* Gallery Content - Collapsible */}
+              {!isGalleryCollapsed && (
+                <div className="h-24 flex items-center px-4 gap-3">
+                  {/* Previous button */}
+                  <button
+                    onClick={() => {
+                      const prevIndex = currentImageIndex - 1
+                      if (prevIndex >= 0) {
+                        setCurrentImageId(images[prevIndex].id)
+                      }
+                    }}
+                    disabled={currentImageIndex <= 0 || images.length === 0}
+                    className="p-2 bg-white hover:bg-gray-100 disabled:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 rounded transition-colors border border-gray-300"
+                    title="Previous image (D)"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+
+                  {/* Thumbnails */}
+                  <div
+                    ref={thumbnailsContainerRef}
+                    className="flex-1 flex gap-3 overflow-x-auto py-3 px-2"
+                    style={{ scrollPaddingInline: '50%' }}
+                  >
+                    {/* Left spacer for centering */}
+                    <div className="flex-shrink-0" style={{ width: 'calc(50% - 50px)' }} />
+
+                    {/* Upload buttons container - hidden in job mode */}
+                    {!isJobMode && (
+                      <div className="flex-shrink-0 flex gap-2">
+                        {/* Upload Files Button */}
+                        <label className="cursor-pointer group" title="Upload image files">
+                          <div className="h-20 w-20 border-2 border-dashed border-gray-300 hover:border-emerald-500 rounded flex flex-col items-center justify-center gap-1 transition-colors bg-white hover:bg-emerald-50">
+                            <Upload className="w-5 h-5 text-gray-400 group-hover:text-emerald-600 transition-colors" />
+                            <span className="text-xs text-gray-500 group-hover:text-emerald-600 transition-colors">Files</span>
+                          </div>
+                          <input
+                            type="file"
+                            accept=".jpg,.jpeg,.png,.webp,.bmp"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files) {
+                                handleImageUpload(e.target.files)
+                              }
+                            }}
+                          />
+                        </label>
+
+                        {/* Upload Folder Button */}
+                        {folderUploadSupported && (
+                          <label className="cursor-pointer group" title="Upload entire folder of images">
+                            <div className="h-20 w-20 border-2 border-dashed border-blue-300 hover:border-blue-500 rounded flex flex-col items-center justify-center gap-1 transition-colors bg-white hover:bg-blue-50">
+                              <svg
+                                className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                              </svg>
+                              <span className="text-xs text-gray-500 group-hover:text-blue-600 transition-colors">Folder</span>
+                            </div>
+                            <input
+                              type="file"
+                              accept=".jpg,.jpeg,.png,.webp,.bmp"
+                              {...({ webkitdirectory: "", mozdirectory: "", directory: "" } as any)}
+                              className="hidden"
+                              onChange={(e) => {
+                                if (e.target.files) {
+                                  handleImageUpload(e.target.files)
+                                }
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )}
+
+                    {images.map((image) => {
+                      // Count annotations for this specific image
+                      const imageAnnotationCount = annotations.filter(a => a.imageId === image.id).length
+
+                      return (
+                        <ImageThumbnail
+                          key={image.id}
+                          image={image}
+                          isActive={currentImageId === image.id}
+                          annotationCount={imageAnnotationCount}
+                          onClick={() => setCurrentImageId(image.id)}
+                          isJobMode={isJobMode}
+                          s3Key={image.s3Key}
+                          dirtyInfo={dirtyImageInfo?.get(image.id)}
+                          isDirty={dirtyImageIds?.has(image.id)}
+                          thumbnailRef={(el) => {
+                            if (el) {
+                              thumbnailRefs.current.set(image.id, el)
+                            } else {
+                              thumbnailRefs.current.delete(image.id)
+                            }
+                          }}
+                          onDelete={(e) => {
+                            e.stopPropagation()
+                            // Don't allow deleting job images
+                            if (isJobMode) {
+                              toast.error('Cannot delete images in job mode')
+                              return
+                            }
+                            if (window.confirm(`Delete "${image.name}"? This will also remove all associated annotations.`)) {
+                              removeImage(image.id)
+                            }
+                          }}
+                        />
+                      )
+                    })}
+
+                    {/* Right spacer for centering */}
+                    <div className="flex-shrink-0" style={{ width: 'calc(50% - 50px)' }} />
+                  </div>
+
+                  {/* Next button */}
+                  <button
+                    onClick={() => {
+                      const nextIndex = currentImageIndex + 1
+                      if (nextIndex < images.length) {
+                        setCurrentImageId(images[nextIndex].id)
+                      }
+                    }}
+                    disabled={currentImageIndex >= images.length - 1 || images.length === 0}
+                    className="p-2 bg-white hover:bg-gray-100 disabled:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 rounded transition-colors border border-gray-300"
+                    title="Next image (F)"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Sidebar */}
-          <Sidebar
+          <AnnotationsSidebar
             annotations={currentAnnotations}
             labels={labels}
-            selectedAnnotation={selectedAnnotation}
+            selectedAnnotations={selectedAnnotations}
             selectedLabelId={selectedLabelId}
-            onSelectAnnotation={setSelectedAnnotation}
+            onSelectAnnotations={setSelectedAnnotations}
             onSelectLabel={setSelectedLabelId}
             onDeleteAnnotation={handleDeleteAnnotation}
             onBulkDeleteAnnotations={handleBulkDeleteAnnotations}
             onBulkChangeLabel={handleBulkChangeLabel}
+            onLabelChange={handleLabelChange}
             onToggleAnnotationVisibility={handleToggleAnnotationVisibility}
             onBulkToggleVisibility={handleBulkToggleVisibility}
             isCollapsed={isRightSidebarCollapsed}
             onToggleCollapse={() => setIsRightSidebarCollapsed(prev => !prev)}
+            appearanceSettings={appearanceSettings}
+            onAppearanceChange={setAppearanceSettings}
+            appearanceDefaults={DEFAULT_APPEARANCE_SETTINGS}
+            imageWidth={currentImage?.width}
+            imageHeight={currentImage?.height}
+            onUpdateAnnotationAttributes={handleUpdateAnnotationAttributes}
           />
-        </div>
-
-        {/* Image Gallery - Bottom strip */}
-        <div className="h-28 glass border-t border-gray-200 flex items-center px-4 gap-3">
-          {/* Previous button */}
-          <button
-            onClick={() => {
-              const prevIndex = currentImageIndex - 1
-              if (prevIndex >= 0) {
-                setCurrentImageId(images[prevIndex].id)
-              }
-            }}
-            disabled={currentImageIndex <= 0 || images.length === 0}
-            className="p-2 bg-white hover:bg-gray-100 disabled:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 rounded transition-colors border border-gray-300"
-            title="Previous image (D)"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-
-          {/* Thumbnails */}
-          <div className="flex-1 flex gap-2 overflow-x-auto py-2">
-            {/* Upload buttons container */}
-            <div className="flex-shrink-0 flex gap-2">
-              {/* Upload Files Button */}
-              <label className="cursor-pointer group" title="Upload image files">
-                <div className="h-20 w-20 border-2 border-dashed border-gray-300 hover:border-emerald-500 rounded flex flex-col items-center justify-center gap-1 transition-colors bg-white hover:bg-emerald-50">
-                  <Upload className="w-5 h-5 text-gray-400 group-hover:text-emerald-600 transition-colors" />
-                  <span className="text-xs text-gray-500 group-hover:text-emerald-600 transition-colors">Files</span>
-                </div>
-                <input
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp,.bmp"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      handleImageUpload(e.target.files)
-                    }
-                  }}
-                />
-              </label>
-
-              {/* Upload Folder Button */}
-              {folderUploadSupported && (
-                <label className="cursor-pointer group" title="Upload entire folder of images">
-                  <div className="h-20 w-20 border-2 border-dashed border-blue-300 hover:border-blue-500 rounded flex flex-col items-center justify-center gap-1 transition-colors bg-white hover:bg-blue-50">
-                    <svg
-                      className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                    </svg>
-                    <span className="text-xs text-gray-500 group-hover:text-blue-600 transition-colors">Folder</span>
-                  </div>
-                  <input
-                    type="file"
-                    accept=".jpg,.jpeg,.png,.webp,.bmp"
-                    {...({ webkitdirectory: "", mozdirectory: "", directory: "" } as any)}
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) {
-                        handleImageUpload(e.target.files)
-                      }
-                    }}
-                  />
-                </label>
-              )}
-            </div>
-
-            {images.map((image) => {
-              // Count annotations for this specific image
-              const imageAnnotationCount = annotations.filter(a => a.imageId === image.id).length
-
-              return (
-                <ImageThumbnail
-                  key={image.id}
-                  image={image}
-                  isActive={currentImageId === image.id}
-                  annotationCount={imageAnnotationCount}
-                  onClick={() => setCurrentImageId(image.id)}
-                  onDelete={(e) => {
-                    e.stopPropagation()
-                    if (window.confirm(`Delete "${image.name}"? This will also remove all associated annotations.`)) {
-                      removeImage(image.id)
-                    }
-                  }}
-                />
-              )
-            })}
-            </div>
-
-            {/* Next button */}
-            <button
-              onClick={() => {
-                const nextIndex = currentImageIndex + 1
-                if (nextIndex < images.length) {
-                  setCurrentImageId(images[nextIndex].id)
-                }
-              }}
-              disabled={currentImageIndex >= images.length - 1 || images.length === 0}
-              className="p-2 bg-white hover:bg-gray-100 disabled:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 rounded transition-colors border border-gray-300"
-              title="Next image (F)"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-        </div>
       </div>
 
       {/* Label Manager Modal */}
@@ -1641,102 +2212,140 @@ function AnnotationApp() {
             images: false,
           })
         }}
-        title="Reset Confirmation"
+        title={isJobMode ? "Reset Job Annotations" : "Reset Confirmation"}
         maxWidth="md"
       >
-        <div className="space-y-4">
-          <div className="bg-red-50/80 border border-red-200 rounded-lg p-4">
-            <p className="text-red-600 font-medium">⚠️ Warning: This action cannot be undone!</p>
+        {isJobMode ? (
+          /* Simplified reset modal for job mode - only reset annotations */
+          <div className="space-y-4">
+            <div className="bg-red-50/80 border border-red-200 rounded-lg p-4">
+              <p className="text-red-600 font-medium">⚠️ Warning: This action cannot be undone!</p>
+            </div>
+            <p className="text-gray-800">
+              This will clear all annotations for all images in this job. Labels and images are managed at the project level and will not be affected.
+            </p>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200/50">
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="px-4 py-2 glass hover:glass-strong text-gray-900 rounded transition-colors border border-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  await resetAll({
+                    clearAnnotations: true,
+                    clearLabels: false,
+                    clearImages: false,
+                    clearToolConfig: false,
+                  })
+                  setShowResetModal(false)
+                  setSelectedAnnotations([])
+                  setSelectedTool('select')
+                }}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+              >
+                Reset Annotations
+              </button>
+            </div>
           </div>
-          <p className="text-gray-800">
-            Select what you want to reset:
-          </p>
+        ) : (
+          /* Full reset modal for solo mode with all options */
+          <div className="space-y-4">
+            <div className="bg-red-50/80 border border-red-200 rounded-lg p-4">
+              <p className="text-red-600 font-medium">⚠️ Warning: This action cannot be undone!</p>
+            </div>
+            <p className="text-gray-800">
+              Select what you want to reset:
+            </p>
 
-          {/* Checklist */}
-          <div className="space-y-2 bg-white/50 rounded-lg p-4">
-            <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
-              <input
-                type="checkbox"
-                checked={resetOptions.annotations}
-                onChange={(e) => setResetOptions(prev => ({ ...prev, annotations: e.target.checked }))}
-                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
-              />
-              <span>All annotations</span>
-            </label>
+            {/* Checklist */}
+            <div className="space-y-2 bg-white/50 rounded-lg p-4">
+              <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
+                <input
+                  type="checkbox"
+                  checked={resetOptions.annotations}
+                  onChange={(e) => setResetOptions(prev => ({ ...prev, annotations: e.target.checked }))}
+                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
+                />
+                <span>All annotations</span>
+              </label>
 
-            <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
-              <input
-                type="checkbox"
-                checked={resetOptions.labels}
-                onChange={(e) => setResetOptions(prev => ({ ...prev, labels: e.target.checked }))}
-                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
-              />
-              <span>All labels (will reset to defaults)</span>
-            </label>
+              <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
+                <input
+                  type="checkbox"
+                  checked={resetOptions.labels}
+                  onChange={(e) => setResetOptions(prev => ({ ...prev, labels: e.target.checked }))}
+                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
+                />
+                <span>All labels (will reset to defaults)</span>
+              </label>
 
-            <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
-              <input
-                type="checkbox"
-                checked={resetOptions.toolConfig}
-                onChange={(e) => setResetOptions(prev => ({ ...prev, toolConfig: e.target.checked }))}
-                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
-              />
-              <span>Tool configuration</span>
-            </label>
+              <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
+                <input
+                  type="checkbox"
+                  checked={resetOptions.toolConfig}
+                  onChange={(e) => setResetOptions(prev => ({ ...prev, toolConfig: e.target.checked }))}
+                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
+                />
+                <span>Tool configuration</span>
+              </label>
 
-            <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
-              <input
-                type="checkbox"
-                checked={resetOptions.images}
-                onChange={(e) => setResetOptions(prev => ({ ...prev, images: e.target.checked }))}
-                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
-              />
-              <span className={resetOptions.images ? 'text-red-600 font-medium' : ''}>
-                Also clear loaded images
-              </span>
-            </label>
+              <label className="flex items-center gap-3 text-gray-800 cursor-pointer hover:bg-white/50 p-2 rounded transition-colors">
+                <input
+                  type="checkbox"
+                  checked={resetOptions.images}
+                  onChange={(e) => setResetOptions(prev => ({ ...prev, images: e.target.checked }))}
+                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-white rounded"
+                />
+                <span className={resetOptions.images ? 'text-red-600 font-medium' : ''}>
+                  Also clear loaded images
+                </span>
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200/50">
+              <button
+                onClick={() => {
+                  setShowResetModal(false)
+                  setResetOptions({
+                    annotations: true,
+                    labels: false,
+                    toolConfig: true,
+                    images: false,
+                  })
+                }}
+                className="px-4 py-2 glass hover:glass-strong text-gray-900 rounded transition-colors border border-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  await resetAll({
+                    clearAnnotations: resetOptions.annotations,
+                    clearLabels: resetOptions.labels,
+                    clearImages: resetOptions.images,
+                    clearToolConfig: resetOptions.toolConfig,
+                  })
+                  setShowResetModal(false)
+                  setResetOptions({
+                    annotations: true,
+                    labels: false,
+                    toolConfig: true,
+                    images: false,
+                  })
+                  setSelectedAnnotations([])
+                  setSelectedTool('select')
+                }}
+                disabled={!resetOptions.annotations && !resetOptions.labels && !resetOptions.toolConfig && !resetOptions.images}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded transition-colors"
+              >
+                Reset Selected
+              </button>
+            </div>
           </div>
-
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200/50">
-            <button
-              onClick={() => {
-                setShowResetModal(false)
-                setResetOptions({
-                  annotations: true,
-                  labels: false,
-                  toolConfig: true,
-                  images: false,
-                })
-              }}
-              className="px-4 py-2 glass hover:glass-strong text-gray-900 rounded transition-colors border border-gray-300"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={async () => {
-                await resetAll({
-                  clearAnnotations: resetOptions.annotations,
-                  clearLabels: resetOptions.labels,
-                  clearImages: resetOptions.images,
-                  clearToolConfig: resetOptions.toolConfig,
-                })
-                setShowResetModal(false)
-                setResetOptions({
-                  annotations: true,
-                  labels: false,
-                  toolConfig: true,
-                  images: false,
-                })
-                setSelectedAnnotation(null)
-                setSelectedTool('select')
-              }}
-              disabled={!resetOptions.annotations && !resetOptions.labels && !resetOptions.toolConfig && !resetOptions.images}
-              className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded transition-colors"
-            >
-              Reset Selected
-            </button>
-          </div>
-        </div>
+        )}
       </Modal>
 
       {/* Keyboard Shortcuts Help Modal */}
@@ -1752,6 +2361,37 @@ function AnnotationApp() {
         images={images}
         annotations={annotations}
         labels={labels}
+      />
+
+      {/* Unsaved Changes Dialog (Job Mode) */}
+      {isJobMode && (
+        <UnsavedChangesDialog
+          isOpen={showUnsavedChangesDialog}
+          pendingCount={pendingCount}
+          isSyncing={syncStatus === 'syncing'}
+          onSave={handleSaveAndLeave}
+          onDiscard={handleDiscardAndLeave}
+          onCancel={handleCancelNavigation}
+        />
+      )}
+
+      {/* Keyboard Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={showKeyboardDeleteConfirm}
+        onClose={() => setShowKeyboardDeleteConfirm(false)}
+        onConfirm={() => {
+          if (selectedAnnotations.length === 1) {
+            handleDeleteAnnotation(selectedAnnotations[0])
+          } else {
+            handleBulkDeleteAnnotations(selectedAnnotations)
+          }
+          setShowKeyboardDeleteConfirm(false)
+        }}
+        title="Delete Annotations"
+        message={`Are you sure you want to delete ${selectedAnnotations.length} annotation${selectedAnnotations.length !== 1 ? 's' : ''}? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        isDangerous={true}
       />
 
       {/* Toast Notifications */}
@@ -1796,6 +2436,8 @@ function AnnotationApp() {
         }}
       />
     </div>
+      )}
+    </>
   )
 }
 

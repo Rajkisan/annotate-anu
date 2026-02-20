@@ -3,90 +3,124 @@
 
   # AnnotateANU
 
-  ### Annotate at the Speed of AI. 100% Private.
+  Self-hosted image annotation with SAM3-assisted segmentation and BYOM inference.
 
-  <p>
-    AnnotateANU combines the power of Meta's SAM3 for instant segmentation with a strictly local-first architecture.<br/>
-    Your images never leave your browser. Free, open-source, and built for high-performance computer vision workflows.
-  </p>
+  AnnotateANU pairs a React/Konva canvas with a FastAPI core for projects, tasks, and exports.
+  The supported setup is the Docker dev stack (web + API Core + SAM3 + worker + Postgres + Redis).
 
   [![Open Source](https://img.shields.io/badge/Open%20Source-100%25-brightgreen)](https://github.com/agfianf/annotate-anu.git)
-  [![Privacy](https://img.shields.io/badge/Privacy-No%20Server%20Uploads-blue)](https://github.com/agfianf/annotate-anu.git)
+  [![Privacy](https://img.shields.io/badge/Privacy-Self%20Hosted-blue)](https://github.com/agfianf/annotate-anu.git)
   [![Powered by SAM3](https://img.shields.io/badge/Powered%20by-Meta%20SAM3-0467DF)](https://huggingface.co/facebook/sam3)
 
-  [Get Started](#quick-start) · [Report Bug](https://github.com/agfianf/annotate-anu/issues)
-
+  [Get Started](#quick-start) · [Docs](docs/Navigation.md) · [API Docs](#api-docs) · [Report Bug](https://github.com/agfianf/annotate-anu/issues)
 </div>
 
 ---
 
-## 📚 Table of Contents
+## Overview
 
-- [Why Choose AnnotateANU?](#why-choose-annotatanu)
-- [Features](#-features)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Roadmap](#-roadmap---coming-soon)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#-contributing)
+AnnotateANU is a full-stack image annotation platform for computer vision datasets.
+It includes a SAM3 inference service, a core API for workflow and data management,
+and a React/Konva UI for annotation, exploration, and exports.
 
----
+## Features
 
-## ✨ Features
+- Annotation canvas with rectangle, polygon, and point tools, selection, vertex editing, zoom/pan, undo/redo, and shortcuts.
+- SAM3 text and bbox prompts with single, auto-apply, and batch modes plus auto-detect helpers.
+- Projects, tasks, and jobs with assignment, status tracking, approvals, and train/val/test splits.
+- File share browser with uploads, shared image registry, project image pools, and tag/category metadata.
+- Explore view with a virtualized gallery, filters, bulk tagging, and analytics panels.
+- **Analytics panels**: Dataset statistics, annotation analysis, spatial heatmaps, and image quality metrics with multi-select filtering.
+- **Image quality metrics**: Background processing for sharpness, brightness, contrast, uniqueness with real-time progress tracking.
+- Exports: server-side datasets (COCO JSON, manifest CSV, image folders) plus local COCO/YOLO export from the annotation app.
+- BYOM registry with inference proxy, plus admin user management and role-based auth.
 
-- **⚡ Automated Segmentation**: SAM3 inference runs locally or via optimized endpoints to auto-segment objects instantly. Use text prompts or bounding boxes to get pixel-perfect masks in milliseconds.
-  - **Text Prompts**: Describe objects in natural language ("person walking", "car on road")
-  - **Bounding Box Exemplars**: Draw boxes around objects to find all similar instances
-  - **Smart Prompt Memory**: Automatically remembers the last text prompt used for each label class
+## Demo
 
-- **🔄 Intelligent Modes**: Choose the workflow that matches your task
-  - **Single Mode**: Process one image at a time with full control
-  - **Auto-Apply Mode**: Set your prompt once, automatically processes each new image
-  - **Batch Mode**: Select multiple images and process them all with the same prompts
+### Hero GIFs (Top Priority)
 
-- **🎯 Manual Precision**: Need to tweak the AI's work? Use our pixel-perfect pen, rectangle, and polygon tools for fine-tuning your annotations with complete control.
+| Demo | GIF | Description |
+| --- | --- | --- |
+| Landing | ![Landing page demo](assets/landing_page.gif) | Marketing landing and onboarding |
+| Annotation workflow | ![Annotation tools demo](assets/features.gif) | Prompt, mask, edit, and export in the canvas |
 
-- **📦 Batch Workflow**: Load hundreds of images at once. Our interface handles batch processing without browser lag, making large dataset annotation a breeze.
+### AI-Powered Annotation
 
-- **⌨️ Lightning Shortcuts**: Designed for power users. Keep your hands on the keyboard and annotate without breaking flow with comprehensive keyboard shortcuts.
+| Demo | GIF | Description |
+| --- | --- | --- |
+| SAM3 Text Prompt | ![SAM3 text prompt](assets/gifs/annotation-sam3-text-prompt.gif) | Type "cat" → instant segmentation mask |
+| SAM3 Bbox Prompt | ![SAM3 bbox prompt](assets/gifs/annotation-sam3-bbox-prompt.gif) | Draw rough box → SAM refines to perfect polygon |
+| Polygon Simplification | ![Polygon simplify](assets/gifs/annotation-polygon-simplify.gif) | Reduce polygon points for easier editing |
+| BYOM Inference | ![BYOM models](assets/gifs/annotation-byom-inference.gif) | Bring your own model for custom detection |
 
-- **💾 Export Ready**: Export to COCO JSON, YOLO format, or ZIP archives with one click. Industry-standard formats ready for your ML pipelines.
+### Explore & Analytics
 
-- **🔒 Local-First Storage**: Your data stays local with IndexedDB - no server uploads, total privacy. All processing happens in your browser or on your local backend.
+| Demo | GIF | Description |
+| --- | --- | --- |
+| Virtualized Gallery | ![Gallery scroll](assets/gifs/explore-gallery-virtualized-scroll.gif) | Smooth scrolling through 1000+ images |
+| Tri-State Filtering | ![Tag filtering](assets/gifs/explore-gallery-tri-state-tags.gif) | Include/exclude/idle tag states with AND/OR |
+| Histogram Filters | ![Histogram filter](assets/gifs/explore-gallery-histogram-filter.gif) | Click histogram bars to filter by dimension |
+| Quality Metrics | ![Quality metrics](assets/gifs/explore-gallery-quality-metrics.gif) | Background processing with progress tracking |
+| Confidence Slider | ![Confidence filter](assets/gifs/explore-gallery-confidence-slider.gif) | Filter annotations by confidence range |
 
+> **Note**: Replace placeholder GIFs above with actual recordings. See [GIF Recording Guide](docs/features/explore-gallery.md#gif-recording-guide) for details.
 
-![feature](assets/features.gif)
+## Why AnnotateANU?
 
+| Feature | AnnotateANU | CVAT | FiftyOne | Encord | Roboflow |
+|---------|:-----------:|:----:|:--------:|:------:|:--------:|
+| **Self-Hosted** | ✅ | ✅ | ✅ | ❌ | ⚠️ |
+| **SAM3 Integration** | ✅ Native | ✅ | ❌ | ✅ | ✅ |
+| **Text Prompts** | ✅ | ❌ | ❌ | ✅ | ✅ |
+| **BYOM Support** | ✅ | ⚠️ | ❌ | ⚠️ | ❌ |
+| **Tri-State Tag Filters** | ✅ | ❌ | ⚠️ | ⚠️ | ❌ |
+| **Histogram Filtering** | ✅ | ❌ | ✅* | ⚠️ | ✅ |
+| **Quality Metrics** | ✅ | ❌ | ⚠️* | ✅ | ❌ |
+| **Model Source Tracking** | ✅ | ❌ | ✅ | ⚠️ | ❌ |
+| **Polygon Simplification** | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+*\*Requires Python code*
+
+### Key Differentiators
+
+- **🎯 Tri-State Tag Filtering**: Include, exclude, or ignore tags with AND/OR logic—unique to AnnotateANU
+- **📊 Integrated Analytics**: Built-in histograms, heatmaps, and quality metrics without code
+- **🤖 BYOM Registry**: Register and use your own inference endpoints alongside SAM3
+- **⚡ Real-time Confidence Filtering**: Slider-based annotation filtering by confidence score
+- **🔧 Polygon Simplification**: Reduce polygon complexity for better performance
 
 ## Architecture
 
-AnnotateANU is a simple monorepo with two independent applications and **two backend options**:
+```mermaid
+flowchart LR
+  user["Annotator"] --> web["Web UI (React + Vite)"]
+  web --> core["API Core (FastAPI)"]
 
+  core --> db[(PostgreSQL)]
+  core --> redis[(Redis)]
+  core --> share["File Share /data/share"]
+  core --> exports["Export Storage /data/exports"]
+  core --> worker["API Core Worker (Celery)"]
+  worker --> exports
+
+  core --> proxy["Inference Proxy"]
+  proxy --> sam3["SAM3 Inference API"]
+  sam3 --> model["SAM3 Model (HF Transformers)"]
+  proxy -.-> byom["BYOM Endpoints"]
 ```
-annotate-anu/                # Simple Monorepo
-├── apps/
-│   ├── web/                 # React annotation interface
-│   │   ├── src/
-│   │   ├── Dockerfile
-│   │   └── package.json
-│   ├── api-inference/       # FastAPI HuggingFace SAM3 backend (gated model)
-│   │   ├── src/app/
-│   │   ├── Dockerfile
-│   │   └── pyproject.toml
-│   ├── api-inference-yolo/  # FastAPI Ultralytics SAM3 backend (recommended)
-│   │   ├── src/app/
-│   │   ├── Dockerfile
-│   │   └── pyproject.toml
-│   └── sam3.pt              # SAM3 model weights (not included, see setup)
-├── venv/                    # Python virtual environment
-├── docker-compose.yml       # Orchestrates all services
-├── setup-yolo.sh/bat        # Setup script for Ultralytics backend
-├── setup-hf.sh/bat          # Setup script for HuggingFace backend
-├── run-yolo.sh/bat          # Run script for Ultralytics backend
-├── run-hf.sh/bat            # Run script for HuggingFace backend
-├── Makefile                 # Development commands
-└── README.md
-```
+
+Diagram source: `docs/architecture/system-overview.mmd`.
+
+## Services (Docker dev stack)
+
+| Service | Responsibility | Port |
+| --- | --- | --- |
+| Web app | Annotation UI, dashboards, explore, exports | 5173 |
+| API Core | Auth, projects, tasks, jobs, model registry, exports | 8001 |
+| SAM3 Inference API | Text, bbox, batch segmentation | 8000 |
+| API Core Worker | Export jobs and background tasks | - |
+| PostgreSQL | Core data store | 5432 |
+| Redis | Cache and task queue | - |
 
 ### Backend Options
 
@@ -107,226 +141,67 @@ annotate-anu/                # Simple Monorepo
 
 ### Prerequisites
 
-- **Python 3.12+** (required for local setup)
-- **Node.js 18+** and **npm** (required for frontend)
-- **Docker & Docker Compose** (optional, for containerized setup)
+- Docker + Docker Compose
+- HuggingFace token for `facebook/sam3` (model access is gated)
 
-### Choose Your Backend
-
-#### Option 1: Ultralytics SAM3 (Recommended) ⚡
-
-**Requirements:**
-- Download `sam3.pt` model weights manually (see instructions below)
-- No HuggingFace account needed
-
-**Setup & Run:**
+### Configure env files
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/agfianf/annotate-anu.git
-cd annotate-anu
-
-# 2. Download SAM3 model weights
-# Visit: https://huggingface.co/facebook/sam3
-# Request access, then download sam3.pt
-# Place it in: apps/sam3.pt
-
-# 3. Run setup script
-./setup-yolo.sh   # Linux/Mac
-setup-yolo.bat    # Windows
-
-# 4. Start the application
-./run-yolo.sh     # Linux/Mac
-run-yolo.bat      # Windows
-
-# Access the application
-# Frontend: http://localhost:5173
-# Backend API: http://localhost:8000
-# API Docs: http://localhost:8000/docs
-```
-
-#### Option 2: HuggingFace SAM3
-
-**Requirements:**
-- HuggingFace account with gated model access
-- Model auto-downloads on first run (~2.4GB)
-
-**Setup & Run:**
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/agfianf/annotate-anu.git
-cd annotate-anu
-
-# 2. Setup HuggingFace token
-# - Create account: https://huggingface.co/join
-# - Request access: https://huggingface.co/facebook/sam3
-# - Generate token: https://huggingface.co/settings/tokens
-
-# 3. Run setup script
-./setup-hf.sh     # Linux/Mac
-setup-hf.bat      # Windows
-
-# 4. Add your HuggingFace token
-# Edit apps/api-inference/.env:
-# HF_TOKEN=hf_your_token_here
-
-# 5. Start the application
-./run-hf.sh       # Linux/Mac
-run-hf.bat        # Windows
-```
-
-### SAM3 Model Weights Setup
-
-**⚠️ IMPORTANT: Unlike other Ultralytics models, SAM3 weights (`sam3.pt`) are NOT automatically downloaded.**
-
-You must manually download the model weights:
-
-1. **Request Access**: Visit [https://huggingface.co/facebook/sam3](https://huggingface.co/facebook/sam3) and click "Request Access"
-2. **Wait for Approval**: You'll receive an email when approved (usually within a few hours)
-3. **Download Model**: Once approved, go to the "Files" tab and download `sam3.pt` (~2.4GB)
-4. **Place File**: Put `sam3.pt` in `apps/sam3.pt` (relative to project root)
-
-```bash
-# Correct location:
-annotate-anu/
-└── apps/
-    └── sam3.pt    # Place the downloaded file here
-```
-
-### Docker Setup (Alternative)
-
-```bash
-# 1. Setup environment (choose your backend)
-cp apps/api-inference-yolo/.env.example apps/api-inference-yolo/.env
-# OR
 cp apps/api-inference/.env.example apps/api-inference/.env
+cp apps/api-core/.env.example apps/api-core/.env
+cp apps/web/.env.example apps/web/.env
+```
 
-# 2. Add credentials and place sam3.pt in apps/
+Add your HuggingFace token in `apps/api-inference/.env`:
 
-# 3. Start all services
+```bash
+HF_TOKEN=hf_your_token_here
+```
+
+### Start the stack
+
+```bash
 make docker-up
-
-# 4. Access the application
-# Frontend: http://localhost:5173
-# Backend API: http://localhost:8000
-# API Docs: http://localhost:8000/docs
 ```
 
-## Troubleshooting
+Services:
+- Web: http://localhost:5173
+- SAM3 API docs: http://localhost:8000/docs
+- API Core docs: http://localhost:8001/docs
 
-### TypeError: 'SimpleTokenizer' object is not callable
-
-If you encounter this error during prediction with Ultralytics SAM3:
+## Local Development (no Docker)
 
 ```bash
-# Activate your virtual environment first
-source venv/bin/activate  # Linux/Mac
-# OR
-venv\Scripts\activate.bat # Windows
+# SAM3 inference
+make backend-install
+make backend-run
 
-# Fix the CLIP package conflict
-pip uninstall clip -y
-pip install git+https://github.com/ultralytics/CLIP.git
+# API core
+make core-install
+make core-run
+
+# Web app
+make frontend-install
+make frontend-dev
 ```
 
-This error occurs when the wrong `clip` package is installed. The Ultralytics-specific CLIP package is required.
+## Configuration
 
-### Model Loading Issues
+- `apps/api-inference/.env`
+  - `HF_TOKEN` (required)
+  - `SAM3_MODEL_NAME`, `SAM3_DEVICE` (`auto`, `cpu`, `cuda`)
+  - `MAX_IMAGE_SIZE_MB`, `MAX_BATCH_SIZE`, `MAX_IMAGE_DIMENSION`
+- `apps/api-core/.env`
+  - `DATABASE_URL`, `DATABASE_URL_SYNC`
+  - `REDIS_URL`
+  - `SAM3_API_URL`
+  - `JWT_SECRET_KEY`
+- `apps/web/.env`
+  - `VITE_SAM3_API_URL`
+  - `VITE_CORE_API_URL`
+  - `VITE_ENV`
 
-**Problem**: "SAM3 model weights not found"
-- **Solution**: Ensure `sam3.pt` is in `apps/sam3.pt` directory
-- Check file permissions: `ls -la apps/sam3.pt`
+## API Docs
 
-**Problem**: "CUDA out of memory"
-- **Solution**: Reduce image size or switch to CPU mode in `.env`:
-  ```bash
-  SAM3_DEVICE=cpu
-  ```
-
-**Problem**: Backend shows "0 detections"
-- **Solution**: Lower the confidence threshold (default 0.25)
-- Try different text prompts (e.g., "object" instead of specific names)
-- Check image quality and size
-
-### Port Already in Use
-
-```bash
-# Linux/Mac
-lsof -ti:8000 | xargs kill -9  # Kill backend
-lsof -ti:5173 | xargs kill -9  # Kill frontend
-
-# Windows
-netstat -ano | findstr :8000  # Find PID
-taskkill /F /PID <PID>        # Kill process
-```
-
-## 🚀 Roadmap - Coming Soon
-
-We are constantly evolving. Here's what's shipping next to AnnotateANU:
-
-#### 🎨 Enhanced Annotation Tools
-- **Magic Wand Tool**: Click-to-segment for quick region selection
-- **Edge Refinement**: AI-powered edge smoothing for precise mask boundaries
-- **Annotation Templates**: Save and reuse common annotation patterns
-
-#### 🔌 Bring Your Own Model (BYOM)
-Connect your existing custom models via API. Pre-label your images using your own weights to bootstrap the annotation process even faster.
-
-#### 🤖 Advanced AI Features
-- **Active Learning**: Intelligently suggest which images to annotate next
-- **Cross-Image Tracking**: Track objects across video frames or image sequences
-- **Multi-Model Ensemble**: Combine predictions from multiple models for better accuracy
-
-#### ☁️ Enterprise Storage Integration
-Move beyond browser storage. We're adding native integration for MinIO and S3-compatible object storage, allowing you to pull and sync datasets directly from your cloud buckets.
-
-#### 👥 Collaboration Features
-- **Team Workspaces**: Share projects and annotations across team members
-- **Review Mode**: Approve or reject annotations with comment threads
-- **Version Control**: Track annotation history and changes over time
-
-#### 📊 Analytics & Insights
-- **Annotation Statistics**: Track productivity metrics and dataset balance
-- **Quality Checks**: Automated validation for annotation consistency
-- **Export Analytics**: Detailed reports on dataset composition
-
-
-## 🤝 Contributing
-
-We welcome contributions from the community! Whether you're fixing bugs, adding features, or improving documentation, we'd love your help.
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Commit your changes (`git commit -m 'Add some amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
-
-Want to influence what we build next? Join our community on GitHub and share your ideas!
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## References
-
-- [SAM3 Model (HuggingFace)](https://huggingface.co/facebook/sam3)
-- [Ultralytics SAM3 Documentation](https://docs.ultralytics.com/models/sam-3/)
-- [T-REX Label](https://www.trexlabel.com/)
-- [MakeSense.ai](https://www.makesense.ai/)
-
-## Acknowledgments
-
-- **Meta AI** for the SAM3 (Segment Anything Model 3) architecture
-- **Ultralytics** for the excellent SAM3 implementation and PyTorch optimization
-- The open-source community for inspiration and tools
-
-
----
-
-<div align="center">
-  <p><strong>Ready to speed up your CV pipeline?</strong></p>
-  <p>© 2025 AnnotateANU. Built for the Computer Vision Community.</p>
-</div>
-
+- SAM3 Inference API: http://localhost:8000/docs
+- API Core: http://localhost:8001/docs

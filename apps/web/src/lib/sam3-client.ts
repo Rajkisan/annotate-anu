@@ -23,7 +23,9 @@ interface APIResponse<T> {
 
 export type SAM3Response = APIResponse<InferenceResult>
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE_URL = import.meta.env.VITE_SAM3_API_URL !== undefined
+  ? import.meta.env.VITE_SAM3_API_URL
+  : 'http://localhost:8000'
 
 export const sam3Client = {
   /**
@@ -34,6 +36,7 @@ export const sam3Client = {
     text_prompt: string
     threshold?: number
     mask_threshold?: number
+    simplify_tolerance?: number
     return_visualization?: boolean
   }): Promise<SAM3Response> {
     console.log('[sam3Client] Text prompt request:', {
@@ -41,6 +44,7 @@ export const sam3Client = {
       imageSize: params.image.size,
       textPrompt: params.text_prompt,
       threshold: params.threshold,
+      simplifyTolerance: params.simplify_tolerance,
       apiUrl: `${API_BASE_URL}/api/v1/sam3/inference/text`
     })
 
@@ -52,6 +56,9 @@ export const sam3Client = {
     }
     if (params.mask_threshold !== undefined) {
       formData.append('mask_threshold', params.mask_threshold.toString())
+    }
+    if (params.simplify_tolerance !== undefined) {
+      formData.append('simplify_tolerance', params.simplify_tolerance.toString())
     }
     if (params.return_visualization !== undefined) {
       formData.append('return_visualization', params.return_visualization.toString())
@@ -104,6 +111,7 @@ export const sam3Client = {
     bounding_boxes: Array<[number, number, number, number, number]>
     threshold?: number
     mask_threshold?: number
+    simplify_tolerance?: number
     return_visualization?: boolean
   }): Promise<SAM3Response> {
     console.log('[sam3Client] Bbox prompt request:', {
@@ -111,6 +119,7 @@ export const sam3Client = {
       imageSize: params.image.size,
       numBoxes: params.bounding_boxes.length,
       threshold: params.threshold,
+      simplifyTolerance: params.simplify_tolerance,
       apiUrl: `${API_BASE_URL}/api/v1/sam3/inference/bbox`
     })
 
@@ -122,6 +131,9 @@ export const sam3Client = {
     }
     if (params.mask_threshold !== undefined) {
       formData.append('mask_threshold', params.mask_threshold.toString())
+    }
+    if (params.simplify_tolerance !== undefined) {
+      formData.append('simplify_tolerance', params.simplify_tolerance.toString())
     }
     if (params.return_visualization !== undefined) {
       formData.append('return_visualization', params.return_visualization.toString())

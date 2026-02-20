@@ -1,50 +1,304 @@
 import Konva from 'konva'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from 'react-konva'
+import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Shape, Stage, Text, Transformer } from 'react-konva'
 import type { Annotation, Label, PolygonAnnotation, RectangleAnnotation, Tool } from '../types/annotations'
+import type { LabelAttributeDefinition } from '../lib/api-client'
+import type { DimLevel } from './sidebar/types'
+import { DIM_LEVEL_MAP } from './sidebar/types'
+import { AnnotationTooltip } from './canvas/AnnotationTooltip'
+import { AnnotationContextMenu } from './canvas/AnnotationContextMenu'
+
+// Disable hover effects above this count to avoid expensive re-renders.
+const HOVER_DISABLE_THRESHOLD = 300
+
+// Helper function to adjust sizes for zoom (keep constant screen size when zooming in)
+const getZoomAdjustedSize = (baseSize: number, zoomLevel: number): number => {
+  return zoomLevel > 1 ? baseSize / zoomLevel : baseSize
+}
+
+const getZoomAdjustedStrokeWidth = (baseSize: number, zoomLevel: number): number => {
+  if (zoomLevel <= 1) return baseSize
+  const adjusted = baseSize / zoomLevel
+  const minSize = 2
+  return Math.max(adjusted, minSize)
+}
+
+const getZoomAdjustedHandleSize = (baseSize: number, zoomLevel: number): number => {
+  if (zoomLevel <= 1) return baseSize
+  const adjusted = baseSize / zoomLevel
+  const minSize = 8
+  return Math.max(adjusted, minSize)
+}
+
+// Memoized static rectangle annotation component
+interface StaticRectAnnotationProps {
+  annotation: RectangleAnnotation
+  color: string
+  labelName: string
+  scale: number
+  zoomLevel: number
+  strokeWidth: number
+  isHovered: boolean
+  showLabels: boolean
+  fillOpacity: number
+  selectedFillOpacity: number
+  onRegisterRef: (id: string, node: Konva.Node | null) => void
+  onClick: (id: string, e?: any) => void
+  onMouseEnter?: (annotation: Annotation, e: any) => void
+  onMouseLeave?: () => void
+  onContextMenu?: (annotation: Annotation, e: any) => void
+}
+
+const StaticRectAnnotation = React.memo(function StaticRectAnnotation({
+  annotation,
+  color,
+  labelName,
+  scale,
+  zoomLevel,
+  strokeWidth,
+  isHovered,
+  showLabels,
+  fillOpacity,
+  selectedFillOpacity,
+  onRegisterRef,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
+  onContextMenu,
+}: StaticRectAnnotationProps) {
+  const LABEL_VISIBILITY_ZOOM_THRESHOLD = 0.5
+  const ANNOTATION_STROKE_OPACITY = 0.9
+
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+
+  return (
+    <React.Fragment>
+      <Rect
+        ref={(node) => onRegisterRef(annotation.id, node)}
+        id={`ann-${annotation.id}`}
+        x={annotation.x * scale}
+        y={annotation.y * scale}
+        width={annotation.width * scale}
+        height={annotation.height * scale}
+        stroke={color}
+        strokeWidth={getZoomAdjustedStrokeWidth(strokeWidth, zoomLevel)}
+        strokeScaleEnabled={false}
+        strokeOpacity={ANNOTATION_STROKE_OPACITY}
+        fill={hexToRgba(color, isHovered ? selectedFillOpacity : fillOpacity)}
+        perfectDrawEnabled={false}
+        listening={true}
+        hitStrokeWidth={10}
+        onClick={(e) => onClick(annotation.id, e)}
+        onTap={(e) => onClick(annotation.id, e)}
+        onMouseEnter={onMouseEnter ? (e) => onMouseEnter(annotation, e) : undefined}
+        onMouseLeave={onMouseLeave}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(annotation, e) : undefined}
+      />
+      {showLabels && zoomLevel >= LABEL_VISIBILITY_ZOOM_THRESHOLD && (
+        <Text
+          x={annotation.x * scale}
+          y={annotation.y * scale - 20}
+          text={labelName}
+          fontSize={getZoomAdjustedSize(14, zoomLevel)}
+          fill="white"
+          padding={4}
+          perfectDrawEnabled={false}
+          listening={false}
+        />
+      )}
+    </React.Fragment>
+  )
+})
+
+// Memoized static polygon annotation component
+interface StaticPolygonAnnotationProps {
+  annotation: PolygonAnnotation
+  color: string
+  labelName: string
+  scale: number
+  zoomLevel: number
+  strokeWidth: number
+  isHovered: boolean
+  showLabels: boolean
+  fillOpacity: number
+  selectedFillOpacity: number
+  onRegisterRef: (id: string, node: Konva.Node | null) => void
+  onClick: (id: string, e?: any) => void
+  onMouseEnter?: (annotation: Annotation, e: any) => void
+  onMouseLeave?: () => void
+  onContextMenu?: (annotation: Annotation, e: any) => void
+}
+
+const StaticPolygonAnnotation = React.memo(function StaticPolygonAnnotation({
+  annotation,
+  color,
+  labelName,
+  scale,
+  zoomLevel,
+  strokeWidth,
+  isHovered,
+  showLabels,
+  fillOpacity,
+  selectedFillOpacity,
+  onRegisterRef,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
+  onContextMenu,
+}: StaticPolygonAnnotationProps) {
+  const LABEL_VISIBILITY_ZOOM_THRESHOLD = 0.5
+  const ANNOTATION_STROKE_OPACITY = 0.9
+
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+
+  const points = annotation.points.flatMap(p => [p.x * scale, p.y * scale])
+  const firstPoint = annotation.points[0]
+
+  return (
+    <React.Fragment>
+      <Line
+        ref={(node) => onRegisterRef(annotation.id, node)}
+        id={`ann-${annotation.id}`}
+        points={points}
+        stroke={color}
+        strokeWidth={getZoomAdjustedStrokeWidth(strokeWidth, zoomLevel)}
+        strokeScaleEnabled={false}
+        strokeOpacity={ANNOTATION_STROKE_OPACITY}
+        fill={hexToRgba(color, isHovered ? selectedFillOpacity : fillOpacity)}
+        closed
+        perfectDrawEnabled={false}
+        listening={true}
+        hitStrokeWidth={10}
+        onClick={(e) => onClick(annotation.id, e)}
+        onTap={(e) => onClick(annotation.id, e)}
+        onMouseEnter={onMouseEnter ? (e) => onMouseEnter(annotation, e) : undefined}
+        onMouseLeave={onMouseLeave}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(annotation, e) : undefined}
+      />
+      {showLabels && firstPoint && zoomLevel >= LABEL_VISIBILITY_ZOOM_THRESHOLD && (
+        <Text
+          x={firstPoint.x * scale}
+          y={firstPoint.y * scale - 20}
+          text={labelName}
+          fontSize={getZoomAdjustedSize(14, zoomLevel)}
+          fill="white"
+          padding={4}
+          perfectDrawEnabled={false}
+          listening={false}
+        />
+      )}
+    </React.Fragment>
+  )
+})
 
 interface CanvasProps {
   image: string | null
+  preloadedImage?: HTMLImageElement
   selectedTool: Tool
   annotations: Annotation[]
   labels: Label[]
   selectedLabelId: string | null
   onAddAnnotation: (annotation: Omit<Annotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'>) => void
   onUpdateAnnotation: (annotation: Annotation) => void
-  selectedAnnotation: string | null
-  onSelectAnnotation: (id: string | null) => void
+  onUpdateManyAnnotations?: (annotations: Annotation[]) => void
+  selectedAnnotations: string[]
+  onSelectAnnotations: (ids: string[]) => void
   promptBboxes?: Array<{ x: number; y: number; width: number; height: number; id: string; labelId: string }>
   zoomLevel?: number
   onZoomChange?: (zoom: number) => void
   stagePosition?: { x: number; y: number }
   onStagePositionChange?: (position: { x: number; y: number }) => void
+  // Sync status indicator
+  pendingChanges?: number // Number of unsaved changes for current image
+  hasError?: boolean // Whether there's a sync error for current image
+  // Appearance settings
+  fillOpacity?: number       // 0-1, default 0 (no fill when unselected)
+  selectedOpacity?: number   // 0-1, default 0.3 (fill when selected)
+  strokeWidth?: number       // pixels, default 2
+  showLabels?: boolean       // default false (hide labels)
+  showPolygons?: boolean     // default true
+  showRectangles?: boolean   // default true
+  showHoverTooltips?: boolean // default true
+  // Highlight mode settings
+  highlightMode?: boolean    // dim non-annotated areas
+  dimLevel?: DimLevel        // light, subtle, medium, strong, very-strong
+  // Context menu handlers
+  onDeleteAnnotation?: (id: string) => void
+  onLabelChange?: (annotationId: string, newLabelId: string) => void
+  onUpdateAnnotationAttributes?: (annotationId: string, attributes: Record<string, string | number | boolean>) => void
 }
 
 const Canvas = React.memo(function Canvas({
   image,
+  preloadedImage,
   selectedTool,
   annotations,
   labels,
   selectedLabelId,
   onAddAnnotation,
   onUpdateAnnotation,
-  selectedAnnotation,
-  onSelectAnnotation,
+  onUpdateManyAnnotations,
+  selectedAnnotations,
+  onSelectAnnotations,
   promptBboxes = [],
   zoomLevel = 1,
   onZoomChange,
   stagePosition = { x: 0, y: 0 },
   onStagePositionChange,
+  pendingChanges = 0,
+  hasError = false,
+  fillOpacity = 0,        // No fill when unselected by default
+  selectedOpacity = 0.3,  // Fill shown when selected
+  strokeWidth = 2,
+  showLabels = false,     // Hide labels by default
+  showPolygons = true,
+  showRectangles = true,
+  showHoverTooltips = true,
+  highlightMode = false,
+  dimLevel = 'medium',
+  onDeleteAnnotation,
+  onLabelChange,
+  onUpdateAnnotationAttributes,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
+  const backgroundStageRef = useRef<Konva.Stage>(null)
   const transformerRef = useRef<Konva.Transformer>(null)
+  const staticLayerRef = useRef<Konva.Layer>(null)
+  const interactiveLayerRef = useRef<Konva.Layer>(null)
   const animationFrameRef = useRef<number | null>(null)
   const konvaImageRef = useRef<HTMLImageElement | null>(null)
+  const zoomRef = useRef(zoomLevel)
+  const stagePositionRef = useRef(stagePosition)
+  const wheelCommitTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const zoomIdleTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const wheelRafRef = useRef<number | null>(null)
+  const wheelDeltaRef = useRef(0)
+  const wheelPointerRef = useRef<{ x: number; y: number } | null>(null)
+  const selectionCommitRef = useRef<number | null>(null)
+  const panCommitTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const selectionPendingRef = useRef<string[] | null>(null)
+  const isZoomingRef = useRef(false)
+  const isPanningRef = useRef(false)
+  const frozenVisibleRef = useRef<Annotation[]>([])
+  // Node reference cache for O(1) lookup instead of findOne() O(n) traversal
+  const nodeRefMapRef = useRef<Map<string, Konva.Node>>(new Map())
   const [konvaImage, setKonvaImage] = useState<HTMLImageElement | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
   const [scale, setScale] = useState(1)
+  // Track if scale has been calculated for current image (prevents annotations from rendering with stale scale)
+  const [scaleInitialized, setScaleInitialized] = useState(false)
   const [currentRectangle, setCurrentRectangle] = useState<number[] | null>(null)
   const [rectangleStartPoint, setRectangleStartPoint] = useState<{ x: number; y: number } | null>(null)
   const [polygonPoints, setPolygonPoints] = useState<Array<{ x: number; y: number }>>([])
@@ -59,25 +313,118 @@ const Canvas = React.memo(function Canvas({
     x: number
     y: number
   } | null>(null)
+  // Track which annotation is being dragged (to hide points/label/coordinates during drag)
+  const [draggingAnnotationId, setDraggingAnnotationId] = useState<string | null>(null)
+  // Track if we're waiting for annotation data to update after drag end
+  const pendingDragEndRef = useRef<{ annotationId: string; node: any } | null>(null)
+  // Track if we're waiting for annotation data to update after polygon point drag end
+  const pendingPointDragEndRef = useRef<{ annotationId: string; pointIndex: number; finalX: number; finalY: number } | null>(null)
+  // Track drag start position to detect click vs drag
+  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null)
+  // Track original positions of all selected annotations for multi-drag
+  const dragOriginalPositionsRef = useRef<Map<string, { annotation: Annotation }> | null>(null)
+  // Track current multi-drag delta for real-time visual updates
+  const multiDragDeltaRef = useRef<{ deltaX: number; deltaY: number } | null>(null)
   const [isDraggingStage, setIsDraggingStage] = useState(false)
   const [stageDragStart, setStageDragStart] = useState<{ x: number; y: number } | null>(null)
   const [isPanMode, setIsPanMode] = useState(false) // Space key hold-to-pan mode
+  const [copiedAnnotation, setCopiedAnnotation] = useState<Annotation | null>(null) // Clipboard for copy-paste
+  // Rubber-band selection state
+  const [rubberBand, setRubberBand] = useState<{
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  } | null>(null)
+  // Hover tooltip state
+  const [hoveredAnnotation, setHoveredAnnotation] = useState<{
+    id: string
+    bounds: { x: number; y: number; width: number; height: number }
+  } | null>(null)
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // Track if mouse is over tooltip to keep it visible
+  const isMouseOverTooltipRef = useRef(false)
+  // Cache container bounds to avoid getBoundingClientRect() on every hover (performance optimization)
+  const containerBoundsRef = useRef<DOMRect | null>(null)
+  const freezeVisibilityRef = useRef(false)
+  // Context menu state
+  const [contextMenuState, setContextMenuState] = useState<{
+    annotation: Annotation
+    position: { x: number; y: number }
+  } | null>(null)
+  // State trigger to force visibility recalculation after zoom ends
+  // (refs don't trigger useMemo recalculation, so we need a state variable)
+  const [visibilityVersion, setVisibilityVersion] = useState(0)
 
   const SNAP_DISTANCE = 10 // pixels in original image coordinates
+  const hoverEnabled = showHoverTooltips && selectedTool === 'select' &&
+    annotations.length <= HOVER_DISABLE_THRESHOLD
+  const [localSelectedAnnotations, setLocalSelectedAnnotations] = useState<string[]>(selectedAnnotations)
+  const selectedIds = localSelectedAnnotations
+  const renderZoomLevel = isZoomingRef.current ? zoomRef.current : zoomLevel
+  const renderStagePosition = (isZoomingRef.current || isPanningRef.current)
+    ? stagePositionRef.current
+    : stagePosition
 
-  // Debug: Log when annotations prop changes
-  useEffect(() => {
-    console.log('[CANVAS] Annotations prop changed:', {
-      count: annotations.length,
-      annotations: annotations.map(a => ({ id: a.id, type: a.type, labelId: a.labelId, imageId: a.imageId }))
-    })
-  }, [annotations])
+  // Clear dragging state when annotations update (after drag end)
+  // useLayoutEffect runs synchronously after DOM mutations but BEFORE browser paint
+  // This prevents any visual flicker by resetting node position before the user sees the frame
+  useLayoutEffect(() => {
+    if (pendingDragEndRef.current) {
+      const { annotationId, node } = pendingDragEndRef.current
 
-  // Annotation appearance constants - adjust these to customize look
-  const ANNOTATION_FILL_OPACITY_SELECTED = 0.2  // Fill opacity when selected
-  const ANNOTATION_FILL_OPACITY_UNSELECTED = 0.4  // Fill opacity when not selected
+      // Find the updated annotation to get its new coordinates
+      const updatedAnnotation = annotations.find(a => a.id === annotationId)
+
+      if (node && updatedAnnotation) {
+        if (updatedAnnotation.type === 'rectangle') {
+          // For rectangles, set the node position to match the new annotation coordinates
+          // This ensures the visual position matches the data
+          const rect = updatedAnnotation as RectangleAnnotation
+          node.x(rect.x * scale)
+          node.y(rect.y * scale)
+          node.width(rect.width * scale)
+          node.height(rect.height * scale)
+        } else if (updatedAnnotation.type === 'polygon') {
+          // For polygons, reset to 0,0 since points contain absolute coordinates
+          node.x(0)
+          node.y(0)
+        }
+        console.log('[DRAG] Reset node position for:', annotationId, updatedAnnotation.type)
+      }
+
+      // Clear pending state
+      pendingDragEndRef.current = null
+      // Clear dragging UI state
+      setDraggingAnnotationId(null)
+    }
+
+    // Handle pending polygon point drag end - clear draggingPoint only after annotation updates
+    if (pendingPointDragEndRef.current) {
+      const { annotationId, pointIndex, finalX, finalY } = pendingPointDragEndRef.current
+      const updatedAnnotation = annotations.find(a => a.id === annotationId) as PolygonAnnotation | undefined
+
+      // Check if the annotation has been updated with the new point position
+      if (updatedAnnotation && updatedAnnotation.type === 'polygon') {
+        const updatedPoint = updatedAnnotation.points[pointIndex]
+        // Verify the point position matches what we expect (with small tolerance for floating point)
+        if (updatedPoint && 
+            Math.abs(updatedPoint.x - finalX) < 0.01 && 
+            Math.abs(updatedPoint.y - finalY) < 0.01) {
+          console.log('[POINT DRAG] Annotation updated, clearing dragging state:', annotationId, pointIndex)
+          pendingPointDragEndRef.current = null
+          setDraggingPoint(null)
+        }
+      }
+    }
+  }, [annotations, scale])
+
+  // Annotation appearance - use props with defaults
+  const ANNOTATION_FILL_OPACITY_SELECTED = selectedOpacity  // Fill opacity when selected
+  const ANNOTATION_FILL_OPACITY_UNSELECTED = fillOpacity  // Fill opacity when not selected
   const ANNOTATION_STROKE_OPACITY = 1  // Stroke/border opacity (always visible)
-  const ANNOTATION_STROKE_WIDTH = 2  // Stroke/border width in pixels
+  const ANNOTATION_STROKE_WIDTH = Math.max(1, strokeWidth)  // Stroke/border width in pixels
+  const LABEL_VISIBILITY_ZOOM_THRESHOLD = 0.3  // Hide labels when zoomed out below this level
+  const transformerAnchorSize = getZoomAdjustedHandleSize(12, renderZoomLevel)
+  const transformerAnchorStrokeWidth = getZoomAdjustedStrokeWidth(2, renderZoomLevel)
 
   // Helper function to convert hex color to rgba with opacity
   const hexToRgba = (hex: string, opacity: number): string => {
@@ -87,19 +434,37 @@ const Canvas = React.memo(function Canvas({
     return `rgba(${r}, ${g}, ${b}, ${opacity})`
   }
 
-  // Helper function to adjust sizes for zoom (keep constant screen size when zooming in)
-  const getZoomAdjustedSize = (baseSize: number, zoomLevel: number): number => {
-    return zoomLevel > 1 ? baseSize / zoomLevel : baseSize
-  }
-
   // Get selected label color (default to orange if no label selected)
   const selectedLabelColor = selectedLabelId
     ? labels.find(l => l.id === selectedLabelId)?.color || '#f97316'
     : '#f97316'
 
-  // Load image
+  // Load image (use preloaded image if available to avoid re-fetching)
   useEffect(() => {
-    if (image) {
+    // Reset scale initialization when image changes to prevent stale scale rendering
+    setScaleInitialized(false)
+
+    if (preloadedImage) {
+      // Use preloaded image directly (skip re-fetch)
+      konvaImageRef.current = preloadedImage
+      setKonvaImage(preloadedImage)
+
+      // Calculate dimensions
+      if (containerRef.current) {
+        const containerWidth = containerRef.current.offsetWidth
+        const containerHeight = containerRef.current.offsetHeight
+        const scaleX = containerWidth / preloadedImage.width
+        const scaleY = containerHeight / preloadedImage.height
+        const newScale = Math.min(scaleX, scaleY)
+        setScale(newScale)
+        setDimensions({
+          width: preloadedImage.width * newScale,
+          height: preloadedImage.height * newScale,
+        })
+        setScaleInitialized(true)
+      }
+    } else if (image) {
+      // Fallback: original loading logic (for non-preloaded images)
       const img = new window.Image()
       img.src = image
       img.onload = () => {
@@ -118,10 +483,11 @@ const Canvas = React.memo(function Canvas({
             width: img.width * newScale,
             height: img.height * newScale,
           })
+          setScaleInitialized(true)
         }
       }
     }
-  }, [image])
+  }, [image, preloadedImage])
 
   // Resize on container size change using ResizeObserver
   // This detects both window resize AND flexbox layout changes (sidebar expand/collapse)
@@ -146,9 +512,14 @@ const Canvas = React.memo(function Canvas({
             width: img.width * newScale,
             height: img.height * newScale,
           })
+          // Cache container bounds for tooltip positioning (avoids getBoundingClientRect on every hover)
+          containerBoundsRef.current = containerRef.current.getBoundingClientRect()
         }
       })
     })
+
+    // Initial cache of container bounds
+    containerBoundsRef.current = containerRef.current.getBoundingClientRect()
 
     // Start observing the container element
     resizeObserver.observe(containerRef.current)
@@ -165,21 +536,98 @@ const Canvas = React.memo(function Canvas({
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current)
       }
+      if (wheelRafRef.current !== null) {
+        cancelAnimationFrame(wheelRafRef.current)
+      }
+      if (wheelCommitTimerRef.current) {
+        clearTimeout(wheelCommitTimerRef.current)
+      }
+      if (zoomIdleTimerRef.current) {
+        clearTimeout(zoomIdleTimerRef.current)
+      }
+      if (selectionCommitRef.current !== null) {
+        cancelAnimationFrame(selectionCommitRef.current)
+      }
+      if (panCommitTimerRef.current) {
+        clearTimeout(panCommitTimerRef.current)
+      }
     }
   }, [])
 
-  // Update transformer when selection changes (only for rectangles)
+  useEffect(() => {
+    if (!isZoomingRef.current) {
+      zoomRef.current = zoomLevel
+    }
+  }, [zoomLevel])
+
+  useEffect(() => {
+    if (!isZoomingRef.current && !isPanningRef.current) {
+      stagePositionRef.current = stagePosition
+    }
+  }, [stagePosition.x, stagePosition.y])
+
+  useLayoutEffect(() => {
+    if (!stageRef.current || !backgroundStageRef.current) return
+    // Skip during active zooming - handleWheel already applied transforms directly
+    // This prevents redundant batchDraw() calls that cause flickering
+    if (isZoomingRef.current || isPanningRef.current) return
+
+    stageRef.current.scale({ x: zoomLevel, y: zoomLevel })
+    stageRef.current.position(stagePosition)
+    stageRef.current.batchDraw()
+    backgroundStageRef.current.scale({ x: zoomLevel, y: zoomLevel })
+    backgroundStageRef.current.position(stagePosition)
+    backgroundStageRef.current.batchDraw()
+  }, [zoomLevel, stagePosition.x, stagePosition.y])
+
+  useEffect(() => {
+    const currentSet = new Set(localSelectedAnnotations)
+    const incomingSet = new Set(selectedAnnotations)
+    const isSame =
+      currentSet.size === incomingSet.size &&
+      localSelectedAnnotations.every(id => incomingSet.has(id))
+
+    const pending = selectionPendingRef.current
+    if (pending) {
+      const pendingSet = new Set(pending)
+      const pendingMatches =
+        pendingSet.size === incomingSet.size &&
+        pending.every(id => incomingSet.has(id))
+
+      if (pendingMatches) {
+        selectionPendingRef.current = null
+        if (!isSame) {
+          setLocalSelectedAnnotations(selectedAnnotations)
+        }
+      }
+      return
+    }
+
+    if (!isSame) {
+      setLocalSelectedAnnotations(selectedAnnotations)
+    }
+  }, [selectedAnnotations, localSelectedAnnotations])
+
+  // Update transformer when selection changes (rectangles only)
   useEffect(() => {
     if (transformerRef.current && stageRef.current && selectedTool === 'select') {
-      if (selectedAnnotation) {
-        const annotation = annotations.find(a => a.id === selectedAnnotation)
-        // Only attach transformer to rectangles, polygons use point-based editing
-        if (annotation && annotation.type === 'rectangle') {
-          const node = stageRef.current.findOne(`#ann-${selectedAnnotation}`)
-          if (node) {
-            transformerRef.current.nodes([node])
-            transformerRef.current.getLayer()?.batchDraw()
-          }
+      if (selectedIds.length > 0) {
+        // For multi-select, attach transformer to all selected rectangles
+        // Use cached node refs for O(1) lookup instead of findOne() O(n) traversal
+        const selectedNodes = selectedIds
+          .map(id => {
+            const annotation = annotations.find(a => a.id === id)
+            if (!annotation || annotation.type !== 'rectangle') return null
+            // Try cached ref first (O(1)), fallback to findOne (O(n)) if not cached yet
+            const cachedNode = nodeRefMapRef.current.get(id)
+            if (cachedNode) return cachedNode
+            return stageRef.current?.findOne(`#ann-${id}`)
+          })
+          .filter((node): node is Konva.Node => node !== null && node !== undefined)
+
+        if (selectedNodes.length > 0) {
+          transformerRef.current.nodes(selectedNodes)
+          transformerRef.current.getLayer()?.batchDraw()
         } else {
           transformerRef.current.nodes([])
           transformerRef.current.getLayer()?.batchDraw()
@@ -189,7 +637,31 @@ const Canvas = React.memo(function Canvas({
         transformerRef.current.getLayer()?.batchDraw()
       }
     }
-  }, [selectedAnnotation, selectedTool, annotations])
+  }, [selectedIds, selectedTool, annotations])
+
+  // Performance optimization: Cache complex polygons with many points
+  // Caching rasterizes the shape to a bitmap, avoiding expensive path recalculation
+  const POLYGON_CACHE_THRESHOLD = 20 // Cache polygons with more than this many points
+  useEffect(() => {
+    if (!stageRef.current) return
+
+    // Find and cache complex polygons in the static layer
+    annotations.forEach(ann => {
+      if (ann.type === 'polygon') {
+        const poly = ann as PolygonAnnotation
+        if (poly.points.length > POLYGON_CACHE_THRESHOLD) {
+          const shape = stageRef.current?.findOne(`#ann-${ann.id}`) as Konva.Shape | undefined
+          if (shape && !shape.isCached()) {
+            try {
+              shape.cache()
+            } catch {
+              // Caching can fail for zero-sized shapes - ignore silently
+            }
+          }
+        }
+      }
+    })
+  }, [annotations, scale, zoomLevel])
 
   // Create label lookup map for O(1) access instead of O(n) search
   const labelMap = useMemo(() => {
@@ -202,29 +674,92 @@ const Canvas = React.memo(function Canvas({
     return labelMap.get(labelId)
   }
 
+  const annotationsById = useMemo(() => {
+    const map = new Map<string, Annotation>()
+    annotations.forEach(annotation => {
+      map.set(annotation.id, annotation)
+    })
+    return map
+  }, [annotations])
+
+  const transformerColor = useMemo(() => {
+    if (selectedIds.length === 1) {
+      const ann = annotations.find(a => a.id === selectedIds[0])
+      const label = ann ? labelMap.get(ann.labelId) : null
+      return label?.color || '#f97316'
+    }
+    return '#f97316'
+  }, [annotations, labelMap, selectedIds])
+
+  // Register/unregister node references for O(1) transformer lookup
+  const registerNodeRef = useCallback((id: string, node: Konva.Node | null) => {
+    if (node) {
+      nodeRefMapRef.current.set(id, node)
+    } else {
+      nodeRefMapRef.current.delete(id)
+    }
+  }, [])
+
   // Check if an annotation should be visible based on annotation visibility
   const isAnnotationVisible = useMemo(() => {
     return (annotation: Annotation): boolean => {
+      if (annotation.type === 'rectangle' && !showRectangles) return false
+      if (annotation.type === 'polygon' && !showPolygons) return false
       // Check annotation's own visibility (default to true if undefined)
       const annotationVisible = annotation.isVisible ?? true
-      if (!annotationVisible) {
-        console.log('[VISIBILITY] Annotation hidden (isVisible=false):', annotation.id)
-        return false
-      }
+      if (!annotationVisible) return false
 
       const label = labelMap.get(annotation.labelId)
-      if (!label) {
-        console.log('[VISIBILITY] Annotation hidden (label not found):', {
-          annotationId: annotation.id,
-          labelId: annotation.labelId,
-          availableLabels: Array.from(labelMap.keys())
-        })
-        return false
-      }
+      if (!label) return false
 
       return true
     }
-  }, [labelMap])
+  }, [labelMap, showPolygons, showRectangles])
+
+  // Performance optimization: Viewport culling - only render annotations in view
+  // This is especially important when zoomed in on a portion of the image
+  const getAnnotationBounds = useCallback((annotation: Annotation): { x: number; y: number; width: number; height: number } => {
+    if (annotation.type === 'rectangle') {
+      const rect = annotation as RectangleAnnotation
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    } else if (annotation.type === 'polygon') {
+      const poly = annotation as PolygonAnnotation
+      if (poly.points.length === 0) return { x: 0, y: 0, width: 0, height: 0 }
+      const xs = poly.points.map(p => p.x)
+      const ys = poly.points.map(p => p.y)
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    }
+    return { x: 0, y: 0, width: 0, height: 0 }
+  }, [])
+
+  const isInViewport = useCallback((annotation: Annotation): boolean => {
+    // Get viewport bounds in original image coordinates
+    const currentZoom = isZoomingRef.current ? zoomRef.current : zoomLevel
+    const currentStagePosition = (isZoomingRef.current || isPanningRef.current)
+      ? stagePositionRef.current
+      : stagePosition
+    const viewportBounds = {
+      x: -currentStagePosition.x / (scale * currentZoom),
+      y: -currentStagePosition.y / (scale * currentZoom),
+      width: dimensions.width / (scale * currentZoom),
+      height: dimensions.height / (scale * currentZoom),
+    }
+
+    const annBounds = getAnnotationBounds(annotation)
+
+    // Check AABB intersection with some padding for edge cases
+    const padding = 50 // pixels in original coords
+    return !(
+      annBounds.x + annBounds.width + padding < viewportBounds.x ||
+      annBounds.x - padding > viewportBounds.x + viewportBounds.width ||
+      annBounds.y + annBounds.height + padding < viewportBounds.y ||
+      annBounds.y - padding > viewportBounds.y + viewportBounds.height
+    )
+  }, [stagePosition, scale, zoomLevel, dimensions, getAnnotationBounds])
 
   const calculateDistance = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2))
@@ -233,40 +768,108 @@ const Canvas = React.memo(function Canvas({
   // Zoom constants
   const MIN_ZOOM = 0.1
   const MAX_ZOOM = 5
-  const ZOOM_SPEED = 1.1
 
   // Handle mouse wheel for zooming
   const handleWheel = (e: any) => {
     e.evt.preventDefault()
+
     if (!onZoomChange || !stageRef.current) return
 
+    freezeVisibilityRef.current = true
+
+    if (hoveredAnnotation) {
+      setHoveredAnnotation(null)
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current)
+        hoverTimeoutRef.current = null
+      }
+      isMouseOverTooltipRef.current = false
+    }
+
     const stage = stageRef.current
-    const oldScale = zoomLevel
     const pointer = stage.getPointerPosition()
-
-    if (!pointer) return
-
-    // Calculate new zoom level
-    const direction = e.evt.deltaY > 0 ? -1 : 1
-    const newScale = direction > 0
-      ? Math.min(MAX_ZOOM, oldScale * ZOOM_SPEED)
-      : Math.max(MIN_ZOOM, oldScale / ZOOM_SPEED)
-
-    if (newScale === oldScale) return
-
-    // Calculate new position to zoom toward mouse cursor
-    const mousePointTo = {
-      x: (pointer.x - stagePosition.x) / oldScale,
-      y: (pointer.y - stagePosition.y) / oldScale,
+    if (pointer) {
+      wheelPointerRef.current = pointer
     }
 
-    const newPos = {
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
-    }
+    const LIMIT_DELTA_Y = 8
+    const clampedDelta = Math.max(-LIMIT_DELTA_Y, Math.min(LIMIT_DELTA_Y, e.evt.deltaY))
+    wheelDeltaRef.current += clampedDelta
 
-    onZoomChange(newScale)
-    onStagePositionChange?.(newPos)
+    if (wheelRafRef.current !== null) return
+
+    wheelRafRef.current = requestAnimationFrame(() => {
+      wheelRafRef.current = null
+      const deltaY = Math.max(-LIMIT_DELTA_Y * 3, Math.min(LIMIT_DELTA_Y * 3, wheelDeltaRef.current))
+      wheelDeltaRef.current = 0
+
+      const currentPointer = wheelPointerRef.current ?? stage.getPointerPosition()
+      if (!currentPointer) return
+
+      const oldScale = zoomRef.current
+      const basicZoomCoef = 6 / 5
+      const adjustCoef = 1 / 10
+      const scaleFactor = basicZoomCoef ** (-deltaY * adjustCoef)
+      const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldScale * scaleFactor))
+
+      if (newScale === oldScale) return
+
+      const mousePointTo = {
+        x: (currentPointer.x - stagePositionRef.current.x) / oldScale,
+        y: (currentPointer.y - stagePositionRef.current.y) / oldScale,
+      }
+
+      const newPos = {
+        x: currentPointer.x - mousePointTo.x * newScale,
+        y: currentPointer.y - mousePointTo.y * newScale,
+      }
+
+      isZoomingRef.current = true
+
+      // Disable static layer event listening during zoom for better performance
+      if (staticLayerRef.current) {
+        staticLayerRef.current.listening(false)
+      }
+
+      if (zoomIdleTimerRef.current) {
+        clearTimeout(zoomIdleTimerRef.current)
+      }
+      zoomIdleTimerRef.current = setTimeout(() => {
+        isZoomingRef.current = false
+        freezeVisibilityRef.current = false
+        zoomIdleTimerRef.current = null
+        // Re-enable static layer event listening after zoom ends
+        if (staticLayerRef.current) {
+          staticLayerRef.current.listening(true)
+        }
+        // Trigger visibility recalculation to show annotations in new viewport
+        setVisibilityVersion(v => v + 1)
+      }, 200) // Extended from 150ms to better handle rapid zoom sequences
+
+      zoomRef.current = newScale
+      stagePositionRef.current = newPos
+
+      stage.scale({ x: newScale, y: newScale })
+      stage.position(newPos)
+      stage.batchDraw()
+      const backgroundStage = backgroundStageRef.current
+      if (backgroundStage) {
+        backgroundStage.scale({ x: newScale, y: newScale })
+        backgroundStage.position(newPos)
+        backgroundStage.batchDraw()
+      }
+
+      if (wheelCommitTimerRef.current) {
+        clearTimeout(wheelCommitTimerRef.current)
+      }
+
+      wheelCommitTimerRef.current = setTimeout(() => {
+        startTransition(() => {
+          onZoomChange(newScale)
+          onStagePositionChange?.(newPos)
+        })
+      }, 100) // Increased from 80ms for better batching of rapid wheel events
+    })
   }
 
   const handleMouseDown = (e: any) => {
@@ -276,29 +879,60 @@ const Canvas = React.memo(function Canvas({
       const pos = stage.getPointerPosition()
       if (pos) {
         setIsDraggingStage(true)
-        setStageDragStart({ x: pos.x - stagePosition.x, y: pos.y - stagePosition.y })
+        isPanningRef.current = true
+        const currentStagePosition = stagePositionRef.current
+        setStageDragStart({ x: pos.x - currentStagePosition.x, y: pos.y - currentStagePosition.y })
       }
       return // Don't process other interactions while in pan mode
     }
 
-    // Deselect when clicking on stage or image (empty area)
-    const clickedOnEmpty = e.target === e.target.getStage() || e.target.attrs?.image
-    if (clickedOnEmpty && selectedTool === 'select') {
-      onSelectAnnotation(null)
-      // Start manual stage panning only when clicking on empty space
-      const stage = e.target.getStage()
-      const pos = stage.getPointerPosition()
-      if (pos) {
-        setIsDraggingStage(true)
-        setStageDragStart({ x: pos.x - stagePosition.x, y: pos.y - stagePosition.y })
-      }
-      return
-    }
-
     if (selectedTool === 'select') {
-      // Clicking on an annotation - disable stage dragging
-      setIsDraggingStage(false)
-      setStageDragStart(null)
+      const stage = e.target.getStage()
+      if (!stage) return
+
+      const isTransformerHandle =
+        e.target.getParent()?.getClassName?.() === 'Transformer' ||
+        e.target.getClassName?.() === 'Transformer'
+
+      if (isTransformerHandle) {
+        return
+      }
+
+      const clickedOnStage = e.target === stage || e.target.getClassName?.() === 'Stage'
+      if (!clickedOnStage) {
+        // Let shape handlers manage selection, dragging, and transforms.
+        setIsDraggingStage(false)
+        setStageDragStart(null)
+        return
+      }
+
+      // Clicked on empty area (stage or image background)
+      // Clear tooltip immediately for better performance
+      if (hoveredAnnotation) {
+        setHoveredAnnotation(null)
+        if (hoverTimeoutRef.current) {
+          clearTimeout(hoverTimeoutRef.current)
+          hoverTimeoutRef.current = null
+        }
+      }
+
+      // Clear selection unless Shift is pressed (non-blocking update)
+      if (!isShiftPressed) {
+        commitSelection([])
+      }
+
+      // Only start rubber-band if we have a valid position
+      const pos = stage?.getPointerPosition()
+      if (pos) {
+        const currentZoom = zoomRef.current
+        const currentStagePosition = stagePositionRef.current
+        const originalX = (pos.x - currentStagePosition.x) / (scale * currentZoom)
+        const originalY = (pos.y - currentStagePosition.y) / (scale * currentZoom)
+        setRubberBand({
+          start: { x: originalX, y: originalY },
+          end: { x: originalX, y: originalY },
+        })
+      }
       return
     }
 
@@ -306,8 +940,10 @@ const Canvas = React.memo(function Canvas({
     const pos = stage.getPointerPosition()
 
     // Convert to original image coordinates (account for both zoom and autofit scale)
-    const originalX = (pos.x - stagePosition.x) / (scale * zoomLevel)
-    const originalY = (pos.y - stagePosition.y) / (scale * zoomLevel)
+    const currentZoom = zoomRef.current
+    const currentStagePosition = stagePositionRef.current
+    const originalX = (pos.x - currentStagePosition.x) / (scale * currentZoom)
+    const originalY = (pos.y - currentStagePosition.y) / (scale * currentZoom)
 
     if (selectedTool === 'rectangle') {
       if (!rectangleStartPoint) {
@@ -328,10 +964,29 @@ const Canvas = React.memo(function Canvas({
 
         if (Math.abs(width) > 5 && Math.abs(height) > 5) {
           // Normalize rectangle (handle negative width/height)
-          const normalizedX = width < 0 ? rectangleStartPoint.x + width : rectangleStartPoint.x
-          const normalizedY = height < 0 ? rectangleStartPoint.y + height : rectangleStartPoint.y
-          const normalizedWidth = Math.abs(width)
-          const normalizedHeight = Math.abs(height)
+          let normalizedX = width < 0 ? rectangleStartPoint.x + width : rectangleStartPoint.x
+          let normalizedY = height < 0 ? rectangleStartPoint.y + height : rectangleStartPoint.y
+          let normalizedWidth = Math.abs(width)
+          let normalizedHeight = Math.abs(height)
+
+          // Apply CVAT-like clipping if image dimensions available
+          const imageWidth = konvaImageRef.current?.width
+          const imageHeight = konvaImageRef.current?.height
+
+          if (imageWidth && imageHeight) {
+            const clipped = clipRectangleToBounds(
+              normalizedX,
+              normalizedY,
+              normalizedWidth,
+              normalizedHeight,
+              imageWidth,
+              imageHeight
+            )
+            normalizedX = clipped.x
+            normalizedY = clipped.y
+            normalizedWidth = clipped.width
+            normalizedHeight = clipped.height
+          }
 
           const newAnnotation: Omit<RectangleAnnotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'> = {
             id: Date.now().toString(),
@@ -355,11 +1010,20 @@ const Canvas = React.memo(function Canvas({
     } else if (selectedTool === 'polygon') {
       // Check if clicking near the first point to close polygon
       if (polygonPoints.length >= 3 && isNearFirstPoint) {
+        // Apply CVAT-like clipping if image dimensions available
+        const imageWidth = konvaImageRef.current?.width
+        const imageHeight = konvaImageRef.current?.height
+
+        let finalPoints = polygonPoints
+        if (imageWidth && imageHeight) {
+          finalPoints = clipPolygonPointsToBounds(polygonPoints, imageWidth, imageHeight)
+        }
+
         // Close the polygon
         const newAnnotation: Omit<PolygonAnnotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'> = {
           id: Date.now().toString(),
           type: 'polygon',
-          points: polygonPoints,
+          points: finalPoints,
         }
         onAddAnnotation(newAnnotation)
         setPolygonPoints([])
@@ -376,6 +1040,8 @@ const Canvas = React.memo(function Canvas({
     const pos = stage.getPointerPosition()
 
     if (!pos || !stage) return
+    const currentZoom = zoomRef.current
+    const currentStagePosition = stagePositionRef.current
 
     // Handle manual stage panning (works in pan mode or select mode)
     if (isDraggingStage && stageDragStart && (isPanMode || selectedTool === 'select')) {
@@ -383,7 +1049,30 @@ const Canvas = React.memo(function Canvas({
         x: pos.x - stageDragStart.x,
         y: pos.y - stageDragStart.y,
       }
-      onStagePositionChange?.(newPos)
+      stagePositionRef.current = newPos
+      stage.position(newPos)
+      stage.batchDraw()
+      const backgroundStage = backgroundStageRef.current
+      if (backgroundStage) {
+        backgroundStage.position(newPos)
+        backgroundStage.batchDraw()
+      }
+      if (panCommitTimerRef.current) {
+        clearTimeout(panCommitTimerRef.current)
+      }
+      panCommitTimerRef.current = setTimeout(() => {
+        startTransition(() => {
+          onStagePositionChange?.(newPos)
+        })
+      }, 50)
+      return
+    }
+
+    // Handle rubber-band selection drag
+    if (rubberBand) {
+      const originalX = (pos.x - currentStagePosition.x) / (scale * currentZoom)
+      const originalY = (pos.y - currentStagePosition.y) / (scale * currentZoom)
+      setRubberBand(prev => prev ? { ...prev, end: { x: originalX, y: originalY } } : null)
       return
     }
 
@@ -401,8 +1090,8 @@ const Canvas = React.memo(function Canvas({
       const containerBox = containerRef.current?.getBoundingClientRect()
 
       // Convert to original image coordinates (account for both zoom and autofit scale)
-      const originalX = (pos.x - stagePosition.x) / (scale * zoomLevel)
-      const originalY = (pos.y - stagePosition.y) / (scale * zoomLevel)
+      const originalX = (pos.x - currentStagePosition.x) / (scale * currentZoom)
+      const originalY = (pos.y - currentStagePosition.y) / (scale * currentZoom)
 
       // Update mouse position for coordinate display (hide when in pan mode)
       if (!isPanMode && (selectedTool === 'rectangle' || selectedTool === 'polygon')) {
@@ -436,29 +1125,212 @@ const Canvas = React.memo(function Canvas({
 
       animationFrameRef.current = null
     })
-  }, [isDraggingStage, stageDragStart, isPanMode, selectedTool, onStagePositionChange, stagePosition.x, stagePosition.y, scale, zoomLevel, polygonPoints, rectangleStartPoint])
+  }, [isDraggingStage, stageDragStart, isPanMode, selectedTool, onStagePositionChange, scale, polygonPoints, rectangleStartPoint, rubberBand])
 
   const handleMouseUp = () => {
     // Rectangle creation now happens on second click in handleMouseDown
     // This function is kept for compatibility but no longer handles rectangle drag
 
+    // Handle rubber-band selection completion
+    if (rubberBand) {
+      // Calculate selection bounds
+      const bounds = {
+        x: Math.min(rubberBand.start.x, rubberBand.end.x),
+        y: Math.min(rubberBand.start.y, rubberBand.end.y),
+        width: Math.abs(rubberBand.end.x - rubberBand.start.x),
+        height: Math.abs(rubberBand.end.y - rubberBand.start.y),
+      }
+
+      // Only select if rubber-band has meaningful size (not just a click)
+      if (bounds.width > 5 || bounds.height > 5) {
+        // Find all visible annotations that intersect with the rubber-band bounds
+        const rubberBandIds = visibleAnnotations
+          .filter(ann => annotationIntersectsRect(ann, bounds))
+          .map(ann => ann.id)
+
+        if (rubberBandIds.length > 0) {
+          // If Shift is held, add to existing selection; otherwise replace
+          if (isShiftPressed) {
+            const newSelection = [...new Set([...selectedIds, ...rubberBandIds])]
+            commitSelection(newSelection)
+          } else {
+            commitSelection(rubberBandIds)
+          }
+          console.log('[RUBBER-BAND] Selected', rubberBandIds.length, 'annotations')
+        }
+      }
+
+      // Clear rubber-band
+      setRubberBand(null)
+      return
+    }
+
     // Stop manual stage panning on mouse up
+    if (isDraggingStage) {
+      if (panCommitTimerRef.current) {
+        clearTimeout(panCommitTimerRef.current)
+        panCommitTimerRef.current = null
+      }
+      startTransition(() => {
+        onStagePositionChange?.(stagePositionRef.current)
+      })
+    }
     setIsDraggingStage(false)
+    isPanningRef.current = false
     setStageDragStart(null)
   }
 
   const handleDoubleClick = () => {
     if (selectedTool === 'polygon' && polygonPoints.length >= 3) {
+      // Apply CVAT-like clipping if image dimensions available
+      const imageWidth = konvaImageRef.current?.width
+      const imageHeight = konvaImageRef.current?.height
+
+      let finalPoints = polygonPoints
+      if (imageWidth && imageHeight) {
+        finalPoints = clipPolygonPointsToBounds(polygonPoints, imageWidth, imageHeight)
+      }
+
       // Create polygon annotation
       const newAnnotation: Omit<PolygonAnnotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'> = {
         id: Date.now().toString(),
         type: 'polygon',
-        points: polygonPoints,
+        points: finalPoints,
       }
       onAddAnnotation(newAnnotation)
       setPolygonPoints([])
       setIsNearFirstPoint(false)
     }
+  }
+
+  /**
+   * Clips a rectangle to stay within image bounds (CVAT-like behavior)
+   * Cuts off any part that extends beyond the boundary
+   * @param x - Rectangle X position
+   * @param y - Rectangle Y position
+   * @param width - Rectangle width
+   * @param height - Rectangle height
+   * @param imageWidth - Image width in pixels
+   * @param imageHeight - Image height in pixels
+   * @returns Clipped rectangle {x, y, width, height}
+   */
+  const clipRectangleToBounds = (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    imageWidth: number,
+    imageHeight: number
+  ): { x: number; y: number; width: number; height: number } => {
+    // Clip left edge
+    let clippedX = Math.max(0, x)
+    // Clip top edge
+    let clippedY = Math.max(0, y)
+
+    // Calculate how much was clipped from left/top
+    const leftClip = clippedX - x
+    const topClip = clippedY - y
+
+    // Adjust width/height for left/top clipping
+    let clippedWidth = width - leftClip
+    let clippedHeight = height - topClip
+
+    // Clip right edge
+    if (clippedX + clippedWidth > imageWidth) {
+      clippedWidth = imageWidth - clippedX
+    }
+
+    // Clip bottom edge
+    if (clippedY + clippedHeight > imageHeight) {
+      clippedHeight = imageHeight - clippedY
+    }
+
+    // Ensure minimum size of 1 pixel
+    clippedWidth = Math.max(1, clippedWidth)
+    clippedHeight = Math.max(1, clippedHeight)
+
+    return {
+      x: clippedX,
+      y: clippedY,
+      width: clippedWidth,
+      height: clippedHeight,
+    }
+  }
+
+  /**
+   * Clips polygon points to stay within image bounds (CVAT-like behavior)
+   * Each point is individually clamped to the boundary
+   * @param points - Array of polygon points
+   * @param imageWidth - Image width in pixels
+   * @param imageHeight - Image height in pixels
+   * @returns Clipped array of points
+   */
+  const clipPolygonPointsToBounds = (
+    points: Array<{ x: number; y: number }>,
+    imageWidth: number,
+    imageHeight: number
+  ): Array<{ x: number; y: number }> => {
+    return points.map(point => ({
+      x: Math.max(0, Math.min(point.x, imageWidth)),
+      y: Math.max(0, Math.min(point.y, imageHeight)),
+    }))
+  }
+
+  /**
+   * Clips a single point to stay within image bounds
+   * @param x - Point X position
+   * @param y - Point Y position
+   * @param imageWidth - Image width in pixels
+   * @param imageHeight - Image height in pixels
+   * @returns Clipped point {x, y}
+   */
+  const clipPointToBounds = (
+    x: number,
+    y: number,
+    imageWidth: number,
+    imageHeight: number
+  ): { x: number; y: number } => {
+    return {
+      x: Math.max(0, Math.min(x, imageWidth)),
+      y: Math.max(0, Math.min(y, imageHeight)),
+    }
+  }
+
+  /**
+   * Check if annotation intersects with rubber-band selection bounds
+   * Used for rubber-band multi-select
+   */
+  const annotationIntersectsRect = (
+    annotation: Annotation,
+    bounds: { x: number; y: number; width: number; height: number }
+  ): boolean => {
+    let annBounds: { x: number; y: number; width: number; height: number }
+
+    if (annotation.type === 'rectangle') {
+      const rect = annotation as RectangleAnnotation
+      annBounds = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    } else if (annotation.type === 'polygon') {
+      const poly = annotation as PolygonAnnotation
+      if (poly.points.length === 0) return false
+      const xs = poly.points.map(p => p.x)
+      const ys = poly.points.map(p => p.y)
+      annBounds = {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
+      }
+    } else {
+      return false
+    }
+
+    // AABB intersection test
+    return !(
+      annBounds.x + annBounds.width < bounds.x ||
+      bounds.x + bounds.width < annBounds.x ||
+      annBounds.y + annBounds.height < bounds.y ||
+      bounds.y + bounds.height < annBounds.y
+    )
   }
 
   // Handle keyboard events (Escape to cancel, Shift for proportional scaling, Ctrl/Cmd for adding points, Space for pan)
@@ -487,6 +1359,132 @@ const Canvas = React.memo(function Canvas({
         // Only if not typing in an input field
         e.preventDefault() // Prevent page scrolling
         setIsPanMode(true)
+      } else if (e.key === 'c' && (e.ctrlKey || e.metaKey) && !isTyping) {
+        // Copy selected annotation (Ctrl+C / Cmd+C) - only copy first if multiple selected
+        if (selectedIds.length > 0) {
+          const annotationToCopy = annotations.find(a => a.id === selectedIds[0])
+          if (annotationToCopy) {
+            setCopiedAnnotation(annotationToCopy)
+            toast.success(selectedIds.length === 1 ? 'Annotation copied' : 'First annotation copied')
+          }
+        }
+      } else if (e.key === 'v' && (e.ctrlKey || e.metaKey) && !isTyping) {
+        // Paste annotation (Ctrl+V / Cmd+V)
+        e.preventDefault() // Prevent default paste behavior
+        if (copiedAnnotation && stageRef.current) {
+          const newId = Date.now().toString()
+          
+          // Get current mouse position on stage
+          const stage = stageRef.current
+          const pointerPos = stage.getPointerPosition()
+          
+          // Convert to original image coordinates if cursor is on canvas
+          let pasteX: number
+          let pasteY: number
+          
+          if (pointerPos) {
+            // Convert screen position to image coordinates
+            const currentZoom = zoomRef.current
+            const currentStagePosition = stagePositionRef.current
+            pasteX = (pointerPos.x - currentStagePosition.x) / (scale * currentZoom)
+            pasteY = (pointerPos.y - currentStagePosition.y) / (scale * currentZoom)
+          } else {
+            // Fallback: use offset from original position if cursor not available
+            const PASTE_OFFSET = 20
+            if (copiedAnnotation.type === 'rectangle') {
+              const rect = copiedAnnotation as RectangleAnnotation
+              pasteX = rect.x + PASTE_OFFSET
+              pasteY = rect.y + PASTE_OFFSET
+            } else {
+              pasteX = 0
+              pasteY = 0
+            }
+          }
+          
+          if (copiedAnnotation.type === 'rectangle') {
+            const rect = copiedAnnotation as RectangleAnnotation
+
+            // Get image dimensions
+            const imageWidth = konvaImageRef.current?.width
+            const imageHeight = konvaImageRef.current?.height
+
+            if (!imageWidth || !imageHeight) {
+              toast.error('Cannot paste: Image dimensions unavailable')
+              return
+            }
+
+            // Apply CVAT-like clipping to paste position and dimensions
+            const clipped = clipRectangleToBounds(
+              pasteX,
+              pasteY,
+              rect.width,
+              rect.height,
+              imageWidth,
+              imageHeight
+            )
+
+            // Create annotation with clipped position and dimensions
+            const newAnnotation: Omit<RectangleAnnotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'> = {
+              id: newId,
+              type: 'rectangle',
+              x: clipped.x,
+              y: clipped.y,
+              width: clipped.width,
+              height: clipped.height,
+            }
+            onAddAnnotation(newAnnotation)
+            toast.success('Annotation pasted')
+          } else if (copiedAnnotation.type === 'polygon') {
+            const poly = copiedAnnotation as PolygonAnnotation
+
+            // Get image dimensions
+            const imageWidth = konvaImageRef.current?.width
+            const imageHeight = konvaImageRef.current?.height
+
+            if (!imageWidth || !imageHeight) {
+              toast.error('Cannot paste: Image dimensions unavailable')
+              return
+            }
+
+            // Calculate the center of the original polygon (bounding box center)
+            const xs = poly.points.map(p => p.x)
+            const ys = poly.points.map(p => p.y)
+            const originalCenterX = (Math.min(...xs) + Math.max(...xs)) / 2
+            const originalCenterY = (Math.min(...ys) + Math.max(...ys)) / 2
+
+            // Calculate offset to move polygon
+            let offsetX: number
+            let offsetY: number
+
+            if (pointerPos) {
+              // Move center to cursor position
+              offsetX = pasteX - originalCenterX
+              offsetY = pasteY - originalCenterY
+            } else {
+              // Fallback: use fixed offset
+              const PASTE_OFFSET = 20
+              offsetX = PASTE_OFFSET
+              offsetY = PASTE_OFFSET
+            }
+
+            // Apply offset to all points
+            const movedPoints = poly.points.map(p => ({
+              x: p.x + offsetX,
+              y: p.y + offsetY,
+            }))
+
+            // Apply CVAT-like clipping to all points
+            const clippedPoints = clipPolygonPointsToBounds(movedPoints, imageWidth, imageHeight)
+
+            const newAnnotation: Omit<PolygonAnnotation, 'imageId' | 'labelId' | 'createdAt' | 'updatedAt'> = {
+              id: newId,
+              type: 'polygon',
+              points: clippedPoints,
+            }
+            onAddAnnotation(newAnnotation)
+            toast.success('Annotation pasted')
+          }
+        }
       }
     }
 
@@ -510,13 +1508,20 @@ const Canvas = React.memo(function Canvas({
       }
     }
 
+    const handleWindowBlur = () => {
+      setIsShiftPressed(false)
+      setIsCtrlPressed(false)
+    }
+
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleWindowBlur)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleWindowBlur)
     }
-  }, [selectedTool, isPanMode])
+  }, [selectedTool, isPanMode, selectedIds, annotations, copiedAnnotation, onAddAnnotation])
 
   // Reset drawing states when image changes
   useEffect(() => {
@@ -526,50 +1531,532 @@ const Canvas = React.memo(function Canvas({
     setIsNearFirstPoint(false)
     setMousePosition(null)
     setCursorScreenPosition(null)
+    setHoveredAnnotation(null)
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+      hoverTimeoutRef.current = null
+    }
+    isMouseOverTooltipRef.current = false
   }, [image])
+
+  // Handle annotation selection with Shift+Click support for multi-select
+  const commitSelection = useCallback((nextSelection: string[]) => {
+    setLocalSelectedAnnotations(nextSelection)
+    selectionPendingRef.current = nextSelection
+    if (selectionCommitRef.current !== null) {
+      cancelAnimationFrame(selectionCommitRef.current)
+    }
+    selectionCommitRef.current = requestAnimationFrame(() => {
+      onSelectAnnotations(nextSelection)
+    })
+  }, [onSelectAnnotations])
+
+  const handleAnnotationClick = useCallback((annotationId: string, e?: any) => {
+    const shiftHeld = e?.evt?.shiftKey ?? isShiftPressed
+    if (shiftHeld) {
+      // Shift+Click: Toggle annotation in selection
+      if (selectedIds.includes(annotationId)) {
+        commitSelection(selectedIds.filter(id => id !== annotationId))
+      } else {
+        commitSelection([...selectedIds, annotationId])
+      }
+    } else {
+      // Normal click: Select only this annotation
+      commitSelection([annotationId])
+    }
+  }, [isShiftPressed, selectedIds, commitSelection])
+
+  // Handle right-click context menu on annotations
+  const handleAnnotationContextMenu = useCallback((annotation: Annotation, e: Konva.KonvaEventObject<PointerEvent | MouseEvent>) => {
+    // Prevent the browser's native context menu
+    e.evt.preventDefault()
+    e.cancelBubble = true
+
+    // Get the screen coordinates of the click
+    const stage = stageRef.current
+    if (!stage) return
+
+    const container = stage.container()
+    const containerRect = container.getBoundingClientRect()
+    const pointerPosition = stage.getPointerPosition()
+
+    if (!pointerPosition) return
+
+    // Convert stage position to screen coordinates
+    const screenX = containerRect.left + pointerPosition.x
+    const screenY = containerRect.top + pointerPosition.y
+
+    // Close any open tooltip
+    setHoveredAnnotation(null)
+
+    // Open context menu
+    setContextMenuState({
+      annotation,
+      position: { x: screenX, y: screenY }
+    })
+  }, [])
+
+  // Close context menu
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenuState(null)
+  }, [])
+
+  // Pre-compute annotation bounds for tooltip positioning (performance optimization)
+  // This avoids expensive calculations on every hover event
+  const annotationBoundsMap = useMemo(() => {
+    if (!hoverEnabled) {
+      return new Map<string, { x: number; y: number; width: number; height: number }>()
+    }
+
+    const boundsMap = new Map<string, { x: number; y: number; width: number; height: number }>()
+
+    for (const ann of annotations) {
+      if (ann.type === 'rectangle') {
+        const rect = ann as RectangleAnnotation
+        boundsMap.set(ann.id, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        })
+      } else if (ann.type === 'polygon') {
+        const poly = ann as PolygonAnnotation
+        if (poly.points.length > 0) {
+          // Single pass O(n) instead of 4x O(n) with map/spread
+          let minX = poly.points[0].x
+          let minY = poly.points[0].y
+          let maxX = minX
+          let maxY = minY
+
+          for (let i = 1; i < poly.points.length; i++) {
+            const p = poly.points[i]
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+          }
+
+          boundsMap.set(ann.id, {
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY,
+          })
+        }
+      }
+    }
+
+    return boundsMap
+  }, [annotations, hoverEnabled])
+
+  useEffect(() => {
+    if (!hoverEnabled && hoveredAnnotation) {
+      setHoveredAnnotation(null)
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current)
+        hoverTimeoutRef.current = null
+      }
+    }
+  }, [hoverEnabled, hoveredAnnotation])
+
+  // Handle annotation hover for tooltip (optimized - uses cached bounds)
+  const handleAnnotationMouseEnter = useCallback((annotation: Annotation, _e: any) => {
+    if (!hoverEnabled) return
+    if (isZoomingRef.current) return
+    console.log('[Canvas] Hover annotation:', annotation.id, 'draggingId:', draggingAnnotationId)
+    // Don't show tooltip while dragging
+    if (draggingAnnotationId) return
+
+    // Debounce to avoid flickering on quick mouse movements
+    hoverTimeoutRef.current = setTimeout(() => {
+      // Use cached container bounds (no getBoundingClientRect - avoids browser reflow!)
+      const containerBox = containerBoundsRef.current
+      if (!containerBox) return
+
+      // Use pre-computed annotation bounds from useMemo (no expensive calculations!)
+      const annBounds = annotationBoundsMap.get(annotation.id)
+      if (!annBounds) return
+
+      // Calculate screen coordinates from cached bounds
+      const currentZoom = zoomRef.current
+      const currentStagePosition = stagePositionRef.current
+      const bounds = {
+        x: containerBox.left + currentStagePosition.x + (annBounds.x * scale * currentZoom),
+        y: containerBox.top + currentStagePosition.y + (annBounds.y * scale * currentZoom),
+        width: annBounds.width * scale * currentZoom,
+        height: annBounds.height * scale * currentZoom,
+      }
+
+      setHoveredAnnotation({
+        id: annotation.id,
+        bounds,
+      })
+    }, 150) // 150ms delay before showing tooltip
+  }, [hoverEnabled, draggingAnnotationId, scale, annotationBoundsMap])
+
+  const handleAnnotationMouseLeave = useCallback(() => {
+    if (!hoverEnabled) return
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+      hoverTimeoutRef.current = null
+    }
+    // Delay hiding to allow mouse to enter tooltip
+    setTimeout(() => {
+      if (!isMouseOverTooltipRef.current) {
+        setHoveredAnnotation(null)
+      }
+    }, 100)
+  }, [hoverEnabled])
+
+  // Tooltip mouse handlers
+  const handleTooltipMouseEnter = useCallback(() => {
+    isMouseOverTooltipRef.current = true
+  }, [])
+
+  const handleTooltipMouseLeave = useCallback(() => {
+    isMouseOverTooltipRef.current = false
+    setHoveredAnnotation(null)
+  }, [])
+
+  // Handle drag start - initialize dragging state
+  const handleDragStart = (annotation: Annotation, e: any) => {
+    setDraggingAnnotationId(annotation.id)
+    // Hide tooltip when dragging starts
+    setHoveredAnnotation(null)
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+      hoverTimeoutRef.current = null
+    }
+    // Store initial position to detect click vs drag
+    const node = e.target
+    dragStartPosRef.current = {
+      x: node.x(),
+      y: node.y()
+    }
+
+    // Multi-drag: Store original positions of ALL selected annotations
+    if (selectedIds.length > 1 && selectedIds.includes(annotation.id)) {
+      const originalPositions = new Map<string, { annotation: Annotation }>()
+
+      selectedIds.forEach(id => {
+        const ann = annotations.find(a => a.id === id)
+        if (ann) {
+          // Store a deep copy of the annotation to preserve original state
+          if (ann.type === 'rectangle') {
+            const rect = ann as RectangleAnnotation
+            originalPositions.set(id, {
+              annotation: {
+                ...rect,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              }
+            })
+          } else if (ann.type === 'polygon') {
+            const poly = ann as PolygonAnnotation
+            originalPositions.set(id, {
+              annotation: {
+                ...poly,
+                points: poly.points.map(p => ({ x: p.x, y: p.y })) // Deep copy points
+              }
+            })
+          }
+        }
+      })
+
+      dragOriginalPositionsRef.current = originalPositions
+      multiDragDeltaRef.current = { deltaX: 0, deltaY: 0 } // Initialize delta
+      console.log('[MULTI-DRAG] Stored original positions for', originalPositions.size, 'annotations')
+    } else {
+      // Single annotation drag - no need to store positions
+      dragOriginalPositionsRef.current = null
+      multiDragDeltaRef.current = null
+    }
+  }
+
+  const handleDragMove = (annotation: Annotation, e: any) => {
+    // Multi-drag: Calculate and store delta for real-time visual updates
+    if (dragOriginalPositionsRef.current && dragOriginalPositionsRef.current.size > 1) {
+      const node = e.target
+      const originalPositions = dragOriginalPositionsRef.current
+      const draggedOriginal = originalPositions.get(annotation.id)
+
+      if (!draggedOriginal) return
+
+      // Calculate current delta
+      let deltaX = 0
+      let deltaY = 0
+
+      if (annotation.type === 'rectangle') {
+        const currentX = node.x() / scale
+        const currentY = node.y() / scale
+        const originalRect = draggedOriginal.annotation as RectangleAnnotation
+        deltaX = currentX - originalRect.x
+        deltaY = currentY - originalRect.y
+      } else if (annotation.type === 'polygon') {
+        deltaX = node.x() / scale
+        deltaY = node.y() / scale
+      }
+
+      // Store delta for later use
+      multiDragDeltaRef.current = { deltaX, deltaY }
+
+      // Update visual position of all other selected nodes (rectangles and polygons)
+      selectedIds.forEach(id => {
+        if (id === annotation.id) return // Skip the dragged one (it's already moving)
+
+        const original = originalPositions.get(id)
+        if (!original) return
+
+        const targetNode = nodeRefMapRef.current.get(id) as any
+        if (!targetNode) return
+
+        if (original.annotation.type === 'rectangle') {
+          const origRect = original.annotation as RectangleAnnotation
+          // Update visual position only (not state)
+          targetNode.x((origRect.x + deltaX) * scale)
+          targetNode.y((origRect.y + deltaY) * scale)
+        } else if (original.annotation.type === 'polygon') {
+          const origPoly = original.annotation as PolygonAnnotation
+          // Update polygon points directly on the Konva Line node
+          const adjustedPoints = origPoly.points.flatMap(p => [
+            (p.x + deltaX) * scale,
+            (p.y + deltaY) * scale
+          ])
+          targetNode.points(adjustedPoints)
+        }
+      })
+
+      // Redraw the layer
+      node.getLayer()?.batchDraw()
+    }
+  }
 
   const handleDragEnd = (annotation: Annotation, e: any) => {
     console.log('[DRAG] handleDragEnd called for:', annotation.type, 'id:', annotation.id)
     const node = e.target
-    console.log('[DRAG] Node position:', { x: node.x(), y: node.y() })
     const scaleX = node.scaleX()
     const scaleY = node.scaleY()
 
-    // Reset scale to 1 and adjust dimensions
+    // Clear cache for this shape (it will be re-cached if still complex enough)
+    if (node.isCached?.()) {
+      node.clearCache()
+    }
+
+    // Check if this was actually a click (minimal movement)
+    const CLICK_THRESHOLD = 3 // pixels
+    if (dragStartPosRef.current) {
+      const deltaX = Math.abs(node.x() - dragStartPosRef.current.x)
+      const deltaY = Math.abs(node.y() - dragStartPosRef.current.y)
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+
+      if (distance < CLICK_THRESHOLD) {
+        // This was a click, not a drag - trigger selection
+        console.log('[DRAG] Detected click (distance:', distance, 'px)')
+        // Reset node position to prevent any visual shift
+        node.x(dragStartPosRef.current.x)
+        node.y(dragStartPosRef.current.y)
+        setDraggingAnnotationId(null)
+        dragStartPosRef.current = null
+        // Clear multi-drag state
+        dragOriginalPositionsRef.current = null
+        multiDragDeltaRef.current = null
+        // Trigger the click handler
+        handleAnnotationClick(annotation.id)
+        return
+      }
+    }
+
+    // Reset scale to 1
     node.scaleX(1)
     node.scaleY(1)
 
-    // Note: Only divide by 'scale' (autofit scale), not zoomLevel
-    // The Stage handles zoomLevel transform, so node positions are in Layer coordinates
+    // Get image dimensions for boundary constraints
+    const imageWidth = konvaImageRef.current?.width
+    const imageHeight = konvaImageRef.current?.height
 
-    if (annotation.type === 'rectangle') {
+    // CHECK: Is this a multi-drag operation?
+    const isMultiDrag = dragOriginalPositionsRef.current !== null &&
+                        dragOriginalPositionsRef.current.size > 1
+
+    if (isMultiDrag) {
+      // === MULTI-DRAG PATH ===
+      console.log('[MULTI-DRAG] Processing group movement')
+
+      const originalPositions = dragOriginalPositionsRef.current!
+      const draggedOriginal = originalPositions.get(annotation.id)
+
+      if (!draggedOriginal) {
+        console.error('[MULTI-DRAG] Original position not found for dragged annotation')
+        return
+      }
+
+      // Calculate delta based on annotation type
+      let deltaX = 0
+      let deltaY = 0
+
+      if (annotation.type === 'rectangle') {
+        // For rectangles: delta = current position - original position
+        const currentX = node.x() / scale
+        const currentY = node.y() / scale
+        const originalRect = draggedOriginal.annotation as RectangleAnnotation
+        deltaX = currentX - originalRect.x
+        deltaY = currentY - originalRect.y
+        console.log('[MULTI-DRAG] Rectangle delta:', { deltaX, deltaY })
+      } else if (annotation.type === 'polygon') {
+        // For polygons: node offset is the delta (since Line renders at 0,0)
+        deltaX = node.x() / scale
+        deltaY = node.y() / scale
+        console.log('[MULTI-DRAG] Polygon delta:', { deltaX, deltaY })
+      }
+
+      // Apply delta to ALL selected annotations
+      const updatedAnnotations: Annotation[] = []
+
+      selectedIds.forEach(id => {
+        const ann = annotations.find(a => a.id === id)
+        const original = originalPositions.get(id)
+
+        if (!ann || !original) return
+
+        if (ann.type === 'rectangle') {
+          const origRect = original.annotation as RectangleAnnotation
+
+          // Apply delta to original position
+          let newX = origRect.x + deltaX
+          let newY = origRect.y + deltaY
+          let newWidth = origRect.width
+          let newHeight = origRect.height
+
+          // Individual clipping for this rectangle
+          if (imageWidth && imageHeight) {
+            const clipped = clipRectangleToBounds(
+              newX, newY, newWidth, newHeight,
+              imageWidth, imageHeight
+            )
+            newX = clipped.x
+            newY = clipped.y
+            newWidth = clipped.width
+            newHeight = clipped.height
+          }
+
+          updatedAnnotations.push({
+            ...ann,
+            x: newX,
+            y: newY,
+            width: newWidth,
+            height: newHeight,
+          } as RectangleAnnotation)
+
+        } else if (ann.type === 'polygon') {
+          const origPoly = original.annotation as PolygonAnnotation
+
+          // Apply delta to all points
+          let newPoints = origPoly.points.map(p => ({
+            x: p.x + deltaX,
+            y: p.y + deltaY,
+          }))
+
+          // Individual clipping for this polygon
+          if (imageWidth && imageHeight) {
+            newPoints = clipPolygonPointsToBounds(newPoints, imageWidth, imageHeight)
+          }
+
+          updatedAnnotations.push({
+            ...ann,
+            points: newPoints,
+            updatedAt: Date.now(),
+          } as PolygonAnnotation)
+        }
+      })
+
+      // Batch update all annotations
+      if (updatedAnnotations.length > 0) {
+        console.log('[MULTI-DRAG] Updating', updatedAnnotations.length, 'annotations')
+        if (onUpdateManyAnnotations) {
+          // Use batch update if available
+          onUpdateManyAnnotations(updatedAnnotations)
+        } else {
+          // Fallback: sequential updates (less efficient)
+          updatedAnnotations.forEach(ann => onUpdateAnnotation(ann))
+        }
+
+        // Store pending drag end for the dragged node
+        pendingDragEndRef.current = { annotationId: annotation.id, node }
+      }
+
+      // Clear multi-drag state
+      dragOriginalPositionsRef.current = null
+      multiDragDeltaRef.current = null
+
+    } else if (annotation.type === 'rectangle') {
+      // === SINGLE-DRAG PATH (rectangles) ===
+      // For Rect, node.x() and node.y() are the ABSOLUTE position on canvas after drag
+      // We need to convert from canvas coordinates back to image coordinates
+      // Canvas coords = image coords * scale, so image coords = canvas coords / scale
+      const newX = node.x() / scale
+      const newY = node.y() / scale
+      const newWidth = (node.width() * scaleX) / scale
+      const newHeight = (node.height() * scaleY) / scale
+
+      console.log('[DRAG] Rectangle new position:', { newX, newY, newWidth, newHeight })
+
+      // Apply CVAT-like clipping if image dimensions available
+      let clippedX = newX
+      let clippedY = newY
+      let clippedWidth = newWidth
+      let clippedHeight = newHeight
+
+      if (imageWidth && imageHeight) {
+        const clipped = clipRectangleToBounds(
+          newX,
+          newY,
+          newWidth,
+          newHeight,
+          imageWidth,
+          imageHeight
+        )
+        clippedX = clipped.x
+        clippedY = clipped.y
+        clippedWidth = clipped.width
+        clippedHeight = clipped.height
+      }
+
       const updatedAnnotation: RectangleAnnotation = {
         ...annotation,
-        x: node.x() / scale,
-        y: node.y() / scale,
-        width: (node.width() * scaleX) / scale,
-        height: (node.height() * scaleY) / scale,
+        x: clippedX,
+        y: clippedY,
+        width: clippedWidth,
+        height: clippedHeight,
       }
+
+      // Store ref to clear dragging state after React updates
+      pendingDragEndRef.current = { annotationId: annotation.id, node }
+
+      // Update annotation - this triggers parent state update
+      // The useLayoutEffect watching annotations will reset node position and clear dragging state
       onUpdateAnnotation(updatedAnnotation)
     } else if (annotation.type === 'polygon') {
-      console.log('[DRAG] Processing polygon drag end')
       const poly = annotation as PolygonAnnotation
+
+      // For Polygon (Line), node.x() and node.y() are the OFFSET from the original position
+      // (since we render the Line at position 0,0 with points containing absolute coords)
       const offsetX = node.x() / scale
       const offsetY = node.y() / scale
-      console.log('[DRAG] Polygon offset:', { offsetX, offsetY, scale })
-      console.log('[DRAG] Original points:', poly.points.slice(0, 2), '...')
 
-      // CRITICAL: Reset node position immediately after reading it
-      // This must happen before React re-renders to prevent position mismatch
-      node.x(0)
-      node.y(0)
+      console.log('[DRAG] Polygon offset:', { offsetX, offsetY })
 
       // Update all polygon points with the offset
-      const updatedPoints = poly.points.map(point => ({
+      let updatedPoints = poly.points.map(point => ({
         x: point.x + offsetX,
         y: point.y + offsetY,
       }))
-      console.log('[DRAG] Updated points:', updatedPoints.slice(0, 2), '...')
+
+      // Apply CVAT-like clipping if image dimensions available
+      if (imageWidth && imageHeight) {
+        updatedPoints = clipPolygonPointsToBounds(updatedPoints, imageWidth, imageHeight)
+      }
 
       const updatedAnnotation: PolygonAnnotation = {
         ...poly,
@@ -577,7 +2064,11 @@ const Canvas = React.memo(function Canvas({
         updatedAt: Date.now(),
       }
 
-      console.log('[DRAG] Calling onUpdateAnnotation for polygon')
+      // Store ref to clear dragging state after React updates
+      pendingDragEndRef.current = { annotationId: annotation.id, node }
+
+      // Update annotation - this triggers parent state update
+      // The useLayoutEffect watching annotations will reset node position and clear dragging state
       onUpdateAnnotation(updatedAnnotation)
     }
   }
@@ -587,20 +2078,50 @@ const Canvas = React.memo(function Canvas({
     const scaleX = node.scaleX()
     const scaleY = node.scaleY()
 
-    // Reset scale to 1 and adjust dimensions
-    node.scaleX(1)
-    node.scaleY(1)
+    // Get image dimensions for boundary constraints
+    const imageWidth = konvaImageRef.current?.width
+    const imageHeight = konvaImageRef.current?.height
 
     // Note: Only divide by 'scale' (autofit scale), not zoomLevel
     // The Stage handles zoomLevel transform, so node positions are in Layer coordinates
 
     if (annotation.type === 'rectangle') {
+      // Reset scale to 1 and adjust dimensions
+      node.scaleX(1)
+      node.scaleY(1)
+
+      const newX = node.x() / scale
+      const newY = node.y() / scale
+      const newWidth = (node.width() * scaleX) / scale
+      const newHeight = (node.height() * scaleY) / scale
+
+      // Apply CVAT-like clipping if image dimensions available
+      let clippedX = newX
+      let clippedY = newY
+      let clippedWidth = newWidth
+      let clippedHeight = newHeight
+
+      if (imageWidth && imageHeight) {
+        const clipped = clipRectangleToBounds(
+          newX,
+          newY,
+          newWidth,
+          newHeight,
+          imageWidth,
+          imageHeight
+        )
+        clippedX = clipped.x
+        clippedY = clipped.y
+        clippedWidth = clipped.width
+        clippedHeight = clipped.height
+      }
+
       const updatedAnnotation: RectangleAnnotation = {
         ...annotation,
-        x: node.x() / scale,
-        y: node.y() / scale,
-        width: (node.width() * scaleX) / scale,
-        height: (node.height() * scaleY) / scale,
+        x: clippedX,
+        y: clippedY,
+        width: clippedWidth,
+        height: clippedHeight,
       }
       onUpdateAnnotation(updatedAnnotation)
     }
@@ -635,8 +2156,28 @@ const Canvas = React.memo(function Canvas({
     const newX = node.x() / scale
     const newY = node.y() / scale
 
+    // Clear cache for the parent polygon (if cached) since points changed
+    const polygonShape = stageRef.current?.findOne(`#ann-${annotation.id}`) as Konva.Shape | undefined
+    if (polygonShape?.isCached?.()) {
+      polygonShape.clearCache()
+    }
+
+    // Get image dimensions for boundary constraints
+    const imageWidth = konvaImageRef.current?.width
+    const imageHeight = konvaImageRef.current?.height
+
+    // Apply CVAT-like clipping if image dimensions available
+    let clippedX = newX
+    let clippedY = newY
+
+    if (imageWidth && imageHeight) {
+      const clipped = clipPointToBounds(newX, newY, imageWidth, imageHeight)
+      clippedX = clipped.x
+      clippedY = clipped.y
+    }
+
     const updatedPoints = [...annotation.points]
-    updatedPoints[pointIndex] = { x: newX, y: newY }
+    updatedPoints[pointIndex] = { x: clippedX, y: clippedY }
 
     const updatedAnnotation: PolygonAnnotation = {
       ...annotation,
@@ -644,8 +2185,16 @@ const Canvas = React.memo(function Canvas({
       updatedAt: Date.now(),
     }
 
+    // Set pending state to delay clearing draggingPoint until annotation updates
+    // This prevents flickering when the component re-renders
+    pendingPointDragEndRef.current = {
+      annotationId: annotation.id,
+      pointIndex,
+      finalX: clippedX,
+      finalY: clippedY,
+    }
+
     onUpdateAnnotation(updatedAnnotation)
-    setDraggingPoint(null)
   }
 
   const handlePolygonPointDelete = (annotation: PolygonAnnotation, pointIndex: number) => {
@@ -672,9 +2221,10 @@ const Canvas = React.memo(function Canvas({
     const pos = stage.getPointerPosition()
 
     // Convert to original image coordinates (account for both zoom and autofit scale)
-    const totalScale = scale * zoomLevel
-    const clickX = (pos.x - stagePosition.x) / totalScale
-    const clickY = (pos.y - stagePosition.y) / totalScale
+    const totalScale = scale * zoomRef.current
+    const currentStagePosition = stagePositionRef.current
+    const clickX = (pos.x - currentStagePosition.x) / totalScale
+    const clickY = (pos.y - currentStagePosition.y) / totalScale
 
     const poly = annotation as PolygonAnnotation
 
@@ -747,19 +2297,80 @@ const Canvas = React.memo(function Canvas({
     return Math.sqrt(dx * dx + dy * dy)
   }
 
-  // Memoize visible annotations to prevent unnecessary re-renders
-  const visibleAnnotations = useMemo(() => {
-    console.log('[RENDER] Filtering annotations:', {
-      totalAnnotations: annotations.length,
-      annotationIds: annotations.map(a => ({ id: a.id, type: a.type, labelId: a.labelId }))
-    })
+  const visibleInViewport = useMemo(() => {
+    if (freezeVisibilityRef.current && frozenVisibleRef.current.length > 0) {
+      return frozenVisibleRef.current
+    }
+
     const visible = annotations.filter(isAnnotationVisible)
-    console.log('[RENDER] Visible annotations:', {
-      visibleCount: visible.length,
-      hiddenCount: annotations.length - visible.length
+    const inView = visible.filter(isInViewport)
+
+    if (!freezeVisibilityRef.current || frozenVisibleRef.current.length === 0) {
+      frozenVisibleRef.current = inView
+    }
+
+    return inView
+    // visibilityVersion forces recalculation when zoom ends (refs don't trigger useMemo)
+  }, [annotations, isAnnotationVisible, isInViewport, visibilityVersion])
+
+  // Selected annotations are always rendered regardless of viewport.
+  const visibleAnnotations = useMemo(() => {
+    if (selectedIds.length === 0) return visibleInViewport
+
+    const combined = [...visibleInViewport]
+    const visibleSet = new Set(visibleInViewport.map(ann => ann.id))
+
+    selectedIds.forEach(id => {
+      if (!visibleSet.has(id)) {
+        const annotation = annotationsById.get(id)
+        if (annotation && isAnnotationVisible(annotation)) {
+          combined.push(annotation)
+        }
+      }
     })
-    return visible
-  }, [annotations, isAnnotationVisible])
+
+    return combined
+  }, [visibleInViewport, selectedIds, annotationsById, isAnnotationVisible])
+
+  const konvaAnnotations = visibleAnnotations
+
+  // Performance optimization: Split annotations into static vs interactive layers
+  // Static layer has listening={false} and won't redraw when interactive layer changes
+  // This is especially important in basic mode (< 100 annotations) where all are in Konva
+  // NOTE: Hover no longer moves annotations between layers (was causing FPS drops)
+  const { staticAnnotations, interactiveAnnotations } = useMemo(() => {
+    // Guard: Don't render annotations until scale is properly calculated
+    // This prevents annotations from appearing at wrong positions on initial load
+    if (!scaleInitialized) {
+      return { staticAnnotations: [], interactiveAnnotations: [] }
+    }
+
+    const selectedSet = new Set(selectedIds)
+    const staticAnns: Annotation[] = []
+    const interactiveAnns: Annotation[] = []
+
+    // Deduplicate annotations by ID (handles legacy duplicate IDs from old timestamp system)
+    const seenIds = new Set<string>()
+    const dedupedAnnotations = konvaAnnotations.filter(ann => {
+      if (seenIds.has(ann.id)) {
+        console.warn(`Duplicate annotation ID detected: ${ann.id}. Skipping duplicate.`)
+        return false
+      }
+      seenIds.add(ann.id)
+      return true
+    })
+
+    for (const ann of dedupedAnnotations) {
+      // Only selected annotations go to interactive layer (not hovered - for performance)
+      if (selectedSet.has(ann.id)) {
+        interactiveAnns.push(ann)
+      } else {
+        staticAnns.push(ann)
+      }
+    }
+
+    return { staticAnnotations: staticAnns, interactiveAnnotations: interactiveAnns }
+  }, [konvaAnnotations, selectedIds, scaleInitialized])
 
   if (!image) {
     return (
@@ -792,21 +2403,15 @@ const Canvas = React.memo(function Canvas({
       className="w-full h-full flex items-center justify-center bg-gray-950 relative"
       style={{ cursor: getCursorStyle() }}
     >
+      {/* Layer 0: Image background */}
       <Stage
-        ref={stageRef}
+        ref={backgroundStageRef}
         width={dimensions.width}
         height={dimensions.height}
-        scaleX={zoomLevel}
-        scaleY={zoomLevel}
-        x={stagePosition.x}
-        y={stagePosition.y}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onDblClick={handleDoubleClick}
+        style={{ position: 'absolute', zIndex: 0, pointerEvents: 'none' }}
+        listening={false}
       >
-        <Layer>
+        <Layer listening={false}>
           {/* Image */}
           {konvaImage && (
             <KonvaImage
@@ -814,25 +2419,179 @@ const Canvas = React.memo(function Canvas({
               image={konvaImage}
               width={dimensions.width}
               height={dimensions.height}
+              listening={false}
             />
           )}
 
-          {/* Existing annotations */}
-          {visibleAnnotations.map((annotation) => {
+          {/* Image boundary border */}
+          {konvaImage && (
+            <Rect
+              key="image-boundary"
+              x={0}
+              y={0}
+              width={dimensions.width}
+              height={dimensions.height}
+              stroke="#4b5563"
+              strokeWidth={getZoomAdjustedSize(2, renderZoomLevel)}
+              fill="transparent"
+              listening={false}
+            />
+          )}
+
+          {/* Highlight mode overlay - dims only OUTSIDE annotation areas (spotlight effect) */}
+          {/* Uses offscreen canvas compositing to correctly handle overlapping annotations */}
+          {highlightMode && dimLevel !== 'none' && konvaImage && (
+            <Shape
+              key="highlight-overlay"
+              listening={false}
+              sceneFunc={(context, shape) => {
+                const dimOpacity = DIM_LEVEL_MAP[dimLevel] || 0.5
+                const ctx = context._context as CanvasRenderingContext2D
+                const w = dimensions.width
+                const h = dimensions.height
+
+                // Create an offscreen canvas for proper compositing
+                // This isolates the destination-out operation from affecting the main layer
+                const offscreen = document.createElement('canvas')
+                offscreen.width = w
+                offscreen.height = h
+                const offCtx = offscreen.getContext('2d')
+                if (!offCtx) return
+
+                // First, fill the offscreen canvas with dim color
+                offCtx.fillStyle = `rgba(0, 0, 0, ${dimOpacity})`
+                offCtx.fillRect(0, 0, w, h)
+
+                // Use destination-out to cut holes for annotations
+                // This correctly handles overlapping areas (union of all shapes)
+                offCtx.globalCompositeOperation = 'destination-out'
+                offCtx.fillStyle = 'rgba(0, 0, 0, 1)' // Fully opaque for clean cutout
+
+                annotations.forEach((ann) => {
+                  // Skip hidden annotations
+                  if (ann.hidden) return
+                  if (ann.isVisible === false) return
+                  // Skip based on visibility filters
+                  if (ann.type === 'polygon' && !showPolygons) return
+                  if (ann.type === 'rectangle' && !showRectangles) return
+
+                  offCtx.beginPath()
+                  if (ann.type === 'rectangle') {
+                    const rect = ann as RectangleAnnotation
+                    offCtx.rect(rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale)
+                  } else if (ann.type === 'polygon') {
+                    const poly = ann as PolygonAnnotation
+                    if (poly.points.length > 2) {
+                      offCtx.moveTo(poly.points[0].x * scale, poly.points[0].y * scale)
+                      for (let i = 1; i < poly.points.length; i++) {
+                        offCtx.lineTo(poly.points[i].x * scale, poly.points[i].y * scale)
+                      }
+                      offCtx.closePath()
+                    }
+                  }
+                  offCtx.fill()
+                })
+
+                // Draw the composited offscreen canvas onto the main canvas
+                ctx.drawImage(offscreen, 0, 0)
+              }}
+            />
+          )}
+        </Layer>
+      </Stage>
+
+      {/* Layer 1: Konva interactive layer (selected annotations + drawing tools) */}
+      <Stage
+        ref={stageRef}
+        width={dimensions.width}
+        height={dimensions.height}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onDblClick={handleDoubleClick}
+        style={{
+          position: 'absolute',
+          zIndex: 2,
+          pointerEvents: 'auto'
+        }}
+      >
+        {/* Static Layer: Non-selected annotations (optimized with memoized components) */}
+        <Layer ref={staticLayerRef} listening={true}>
+          {staticAnnotations.map((annotation) => {
             const label = getLabel(annotation.labelId)
             const color = label?.color || '#f97316'
             const labelName = label?.name || 'Unknown'
-            const isSelected = selectedAnnotation === annotation.id
-            
-            // Check if this annotation is part of a group and should skip label rendering
-            const shouldSkipLabel = annotation.groupId && 
-              visibleAnnotations.some(a => a.groupId === annotation.groupId && a.type === 'polygon' && a.id !== annotation.id)
+            const isHovered = hoverEnabled && hoveredAnnotation?.id === annotation.id
+
+            if (annotation.type === 'rectangle') {
+              return (
+                <StaticRectAnnotation
+                  key={`static-rect-${annotation.id}`}
+                  annotation={annotation as RectangleAnnotation}
+                  color={color}
+                  labelName={labelName}
+                  scale={scale}
+                  zoomLevel={renderZoomLevel}
+                  strokeWidth={ANNOTATION_STROKE_WIDTH}
+                  isHovered={isHovered}
+                  showLabels={showLabels}
+                  fillOpacity={ANNOTATION_FILL_OPACITY_UNSELECTED}
+                  selectedFillOpacity={ANNOTATION_FILL_OPACITY_SELECTED}
+                  onRegisterRef={registerNodeRef}
+                  onClick={handleAnnotationClick}
+                  onMouseEnter={hoverEnabled ? handleAnnotationMouseEnter : undefined}
+                  onMouseLeave={hoverEnabled ? handleAnnotationMouseLeave : undefined}
+                  onContextMenu={handleAnnotationContextMenu}
+                />
+              )
+            } else if (annotation.type === 'polygon') {
+              return (
+                <StaticPolygonAnnotation
+                  key={`static-poly-${annotation.id}`}
+                  annotation={annotation as PolygonAnnotation}
+                  color={color}
+                  labelName={labelName}
+                  scale={scale}
+                  zoomLevel={renderZoomLevel}
+                  strokeWidth={ANNOTATION_STROKE_WIDTH}
+                  isHovered={isHovered}
+                  showLabels={showLabels}
+                  fillOpacity={ANNOTATION_FILL_OPACITY_UNSELECTED}
+                  selectedFillOpacity={ANNOTATION_FILL_OPACITY_SELECTED}
+                  onRegisterRef={registerNodeRef}
+                  onClick={handleAnnotationClick}
+                  onMouseEnter={hoverEnabled ? handleAnnotationMouseEnter : undefined}
+                  onMouseLeave={hoverEnabled ? handleAnnotationMouseLeave : undefined}
+                  onContextMenu={handleAnnotationContextMenu}
+                />
+              )
+            }
+            return null
+          })}
+        </Layer>
+
+        {/* Interactive Layer: Selected annotations with full interactivity */}
+        <Layer ref={interactiveLayerRef}>
+          {interactiveAnnotations.map((annotation) => {
+            const label = getLabel(annotation.labelId)
+            const color = label?.color || '#f97316'
+            const labelName = label?.name || 'Unknown'
+            const isSelected = selectedIds.includes(annotation.id)
+            // Show selected appearance when hovered or selected
+            const isHovered = hoverEnabled && hoveredAnnotation?.id === annotation.id
+            const showSelectedFill = isSelected || isHovered
 
             if (annotation.type === 'rectangle') {
               const rect = annotation as RectangleAnnotation
+              const isDragging = draggingAnnotationId === annotation.id
+              const isInMultiDrag = draggingAnnotationId !== null && selectedIds.includes(annotation.id)
+              const shouldHideLabel = isDragging || isInMultiDrag
+
               return (
                 <React.Fragment key={`rect-group-${annotation.id}`}>
                   <Rect
+                    ref={(node) => registerNodeRef(annotation.id, node)}
                     key={`rect-${annotation.id}`}
                     id={`ann-${annotation.id}`}
                     x={rect.x * scale}
@@ -840,29 +2599,39 @@ const Canvas = React.memo(function Canvas({
                     width={rect.width * scale}
                     height={rect.height * scale}
                     stroke={color}
-                    strokeWidth={getZoomAdjustedSize(ANNOTATION_STROKE_WIDTH, zoomLevel)}
+                    strokeWidth={getZoomAdjustedStrokeWidth(ANNOTATION_STROKE_WIDTH, renderZoomLevel)}
                     strokeScaleEnabled={false}
                     strokeOpacity={ANNOTATION_STROKE_OPACITY}
                     fill={hexToRgba(
                       color,
-                      isSelected ? ANNOTATION_FILL_OPACITY_SELECTED : ANNOTATION_FILL_OPACITY_UNSELECTED
+                      showSelectedFill ? ANNOTATION_FILL_OPACITY_SELECTED : ANNOTATION_FILL_OPACITY_UNSELECTED
                     )}
-                    onClick={() => onSelectAnnotation(annotation.id)}
-                    onTap={() => onSelectAnnotation(annotation.id)}
-                    draggable={selectedTool === 'select'}
+                    // Performance optimizations
+                    perfectDrawEnabled={false}
+                    hitStrokeWidth={0}
+                    listening={true}
+                    onClick={(e) => handleAnnotationClick(annotation.id, e)}
+                    onTap={(e) => handleAnnotationClick(annotation.id, e)}
+                    draggable={selectedTool === 'select' && isSelected}
+                    onDragStart={(e) => handleDragStart(annotation, e)}
+                    onDragMove={(e) => handleDragMove(annotation, e)}
                     onDragEnd={(e) => handleDragEnd(annotation, e)}
                     onTransformEnd={(e) => handleTransformEnd(annotation, e)}
+                    onMouseEnter={hoverEnabled ? (e) => handleAnnotationMouseEnter(annotation, e) : undefined}
+                    onMouseLeave={hoverEnabled ? handleAnnotationMouseLeave : undefined}
+                    onContextMenu={(e) => handleAnnotationContextMenu(annotation, e)}
                   />
-                  {/* Label text above rectangle - only if not part of a grouped bbox+polygon */}
-                  {!shouldSkipLabel && (
+                  {/* Label text above rectangle - hide during drag and when zoomed out */}
+                  {showLabels && !shouldHideLabel && renderZoomLevel >= LABEL_VISIBILITY_ZOOM_THRESHOLD && (
                     <Text
                       key={`rect-label-${annotation.id}`}
                       x={rect.x * scale}
                       y={rect.y * scale - 20}
                       text={labelName}
-                      fontSize={getZoomAdjustedSize(14, zoomLevel)}
+                      fontSize={getZoomAdjustedSize(14, renderZoomLevel)}
                       fill="white"
                       padding={4}
+                      perfectDrawEnabled={false}
                       listening={false}
                     />
                   )}
@@ -870,97 +2639,121 @@ const Canvas = React.memo(function Canvas({
               )
             } else if (annotation.type === 'polygon') {
               const poly = annotation as PolygonAnnotation
+              const isDragging = draggingAnnotationId === annotation.id
+              const isInMultiDrag = draggingAnnotationId !== null && selectedIds.includes(annotation.id)
+              const shouldHideLabel = isDragging || isInMultiDrag
+              const shouldHidePoints = isDragging || isInMultiDrag
 
-              // Use dragging point if this polygon is being edited
-              const displayPoints = draggingPoint && draggingPoint.annotationId === annotation.id
-                ? poly.points.map((p, idx) =>
-                    idx === draggingPoint.pointIndex
-                      ? { x: draggingPoint.x, y: draggingPoint.y }
-                      : p
-                  )
-                : poly.points
+              // Use dragging point if this polygon point is being edited (individual point drag)
+              let displayPoints = poly.points
+              if (draggingPoint && draggingPoint.annotationId === annotation.id) {
+                displayPoints = poly.points.map((p, idx) =>
+                  idx === draggingPoint.pointIndex
+                    ? { x: draggingPoint.x, y: draggingPoint.y }
+                    : p
+                )
+              }
 
               const points = displayPoints.flatMap(p => [p.x * scale, p.y * scale])
 
               return (
                 <Group
                   key={`poly-group-${annotation.id}`}
-                  id={`ann-${annotation.id}`}
-                  draggable={selectedTool === 'select'}
-                  onDragStart={() => console.log('[DRAG] Polygon drag started:', annotation.id)}
-                  {...(selectedTool === 'select' && { onDragEnd: (e) => handleDragEnd(annotation, e) })}
                 >
                   <Line
+                    ref={(node) => registerNodeRef(annotation.id, node)}
                     key={`poly-${annotation.id}`}
+                    id={`ann-${annotation.id}`}
                     points={points}
                     stroke={color}
-                    strokeWidth={getZoomAdjustedSize(ANNOTATION_STROKE_WIDTH, zoomLevel)}
+                    strokeWidth={getZoomAdjustedStrokeWidth(ANNOTATION_STROKE_WIDTH, renderZoomLevel)}
                     strokeScaleEnabled={false}
                     strokeOpacity={ANNOTATION_STROKE_OPACITY}
                     fill={hexToRgba(
                       color,
-                      isSelected ? ANNOTATION_FILL_OPACITY_SELECTED : ANNOTATION_FILL_OPACITY_UNSELECTED
+                      showSelectedFill ? ANNOTATION_FILL_OPACITY_SELECTED : ANNOTATION_FILL_OPACITY_UNSELECTED
                     )}
                     closed
+                    // Performance optimizations
+                    perfectDrawEnabled={false}
+                    hitStrokeWidth={0}
+                    listening={true}
+                    draggable={selectedTool === 'select' && isSelected}
+                    onDragStart={(e) => handleDragStart(annotation, e)}
+                    onDragMove={(e) => handleDragMove(annotation, e)}
+                    onDragEnd={(e) => handleDragEnd(annotation, e)}
                     onClick={(e) => {
                       if (isCtrlPressed && isSelected) {
                         handlePolygonLineClick(poly, e)
                       } else {
-                        onSelectAnnotation(annotation.id)
+                        handleAnnotationClick(annotation.id, e)
                       }
                     }}
-                    onTap={() => onSelectAnnotation(annotation.id)}
+                    onTap={(e) => handleAnnotationClick(annotation.id, e)}
+                    onMouseEnter={hoverEnabled ? (e) => handleAnnotationMouseEnter(annotation, e) : undefined}
+                    onMouseLeave={hoverEnabled ? handleAnnotationMouseLeave : undefined}
+                    onContextMenu={(e) => handleAnnotationContextMenu(annotation, e)}
                   />
-                  {/* Label text above polygon (use first point) - only if not part of a grouped bbox+polygon */}
-                  {displayPoints.length > 0 && !shouldSkipLabel && (
+                  {/* Label text above polygon - hide during drag and when zoomed out */}
+                  {showLabels && displayPoints.length > 0 && !shouldHideLabel && renderZoomLevel >= LABEL_VISIBILITY_ZOOM_THRESHOLD && (
                     <Text
                       key={`poly-label-${annotation.id}`}
                       x={displayPoints[0].x * scale}
                       y={displayPoints[0].y * scale - 20}
                       text={labelName}
-                      fontSize={getZoomAdjustedSize(14, zoomLevel)}
+                      fontSize={getZoomAdjustedSize(14, renderZoomLevel)}
                       fill="white"
                       padding={4}
+                      perfectDrawEnabled={false}
                       listening={false}
                     />
                   )}
-                  {/* Show polygon points as small circles - interactive when selected */}
-                  {isSelected && poly.points.map((point, idx) => (
-                    <Circle
-                      key={`poly-point-${annotation.id}-${idx}`}
-                      x={point.x * scale}
-                      y={point.y * scale}
-                      radius={getZoomAdjustedSize(6, zoomLevel)}
-                      fill={color}
-                      stroke="white"
-                      strokeWidth={getZoomAdjustedSize(2, zoomLevel)}
-                      draggable={true}
-                      onDragStart={(e) => {
-                        e.cancelBubble = true // Prevent group drag
-                        handlePolygonPointDragStart(poly, idx)
-                      }}
-                      onDragMove={(e) => {
-                        e.cancelBubble = true // Prevent group drag
-                        handlePolygonPointDragMove(poly, idx, e)
-                      }}
-                      onDragEnd={(e) => {
-                        e.cancelBubble = true // Prevent group drag
-                        handlePolygonPointDragEnd(poly, idx, e)
-                      }}
-                      onDblClick={(e) => {
-                        e.cancelBubble = true // Prevent double-click propagation
-                        handlePolygonPointDelete(poly, idx)
-                      }}
-                      onMouseEnter={(e) => {
-                        const container = e.target.getStage()?.container()
-                        if (container) container.style.cursor = 'pointer'
-                      }}
-                      onMouseLeave={(e) => {
-                        const container = e.target.getStage()?.container()
-                        if (container) container.style.cursor = getCursorStyle()
-                      }}
-                    />
-                  ))}
+                  {/* Show polygon points as small circles - hide during drag */}
+                  {isSelected && !shouldHidePoints && displayPoints.map((point, idx) => {
+                    return (
+                      <Circle
+                        key={`poly-point-${annotation.id}-${idx}`}
+                        x={point.x * scale}
+                        y={point.y * scale}
+                        radius={getZoomAdjustedSize(6, renderZoomLevel)}
+                        fill={color}
+                        stroke="white"
+                        strokeWidth={getZoomAdjustedSize(2, renderZoomLevel)}
+                        draggable={true}
+                        onDragStart={(e) => {
+                          e.cancelBubble = true // Prevent group drag
+                          handlePolygonPointDragStart(poly, idx)
+                        }}
+                        onDragMove={(e) => {
+                          e.cancelBubble = true // Prevent group drag
+                          handlePolygonPointDragMove(poly, idx, e)
+                        }}
+                        onDragEnd={(e) => {
+                          e.cancelBubble = true // Prevent group drag
+                          // Reset circle position to scaled coordinates before updating annotation
+                          // This prevents visual flickering when the annotation data updates
+                          const node = e.target
+                          const newX = node.x() / scale
+                          const newY = node.y() / scale
+                          node.x(newX * scale)
+                          node.y(newY * scale)
+                          handlePolygonPointDragEnd(poly, idx, e)
+                        }}
+                        onDblClick={(e) => {
+                          e.cancelBubble = true // Prevent double-click propagation
+                          handlePolygonPointDelete(poly, idx)
+                        }}
+                        onMouseEnter={(e) => {
+                          const container = e.target.getStage()?.container()
+                          if (container) container.style.cursor = 'pointer'
+                        }}
+                        onMouseLeave={(e) => {
+                          const container = e.target.getStage()?.container()
+                          if (container) container.style.cursor = getCursorStyle()
+                        }}
+                      />
+                    )
+                  })}
                 </Group>
               )
             }
@@ -981,7 +2774,7 @@ const Canvas = React.memo(function Canvas({
                   width={bbox.width * scale}
                   height={bbox.height * scale}
                   stroke={bboxColor}
-                  strokeWidth={getZoomAdjustedSize(2, zoomLevel)}
+                  strokeWidth={getZoomAdjustedSize(2, renderZoomLevel)}
                   dash={[10, 5]}
                   fill={`${bboxColor}1A`}
                   listening={false}
@@ -990,7 +2783,7 @@ const Canvas = React.memo(function Canvas({
                   x={bbox.x * scale}
                   y={bbox.y * scale - 20}
                   text={`${bboxLabelName} (Prompt)`}
-                  fontSize={getZoomAdjustedSize(12, zoomLevel)}
+                  fontSize={getZoomAdjustedSize(12, renderZoomLevel)}
                   fill={bboxColor}
                   padding={4}
                   listening={false}
@@ -1009,7 +2802,7 @@ const Canvas = React.memo(function Canvas({
                 width={currentRectangle[2] * scale}
                 height={currentRectangle[3] * scale}
                 stroke={selectedLabelColor}
-                strokeWidth={getZoomAdjustedSize(2, zoomLevel)}
+                strokeWidth={getZoomAdjustedStrokeWidth(ANNOTATION_STROKE_WIDTH, renderZoomLevel)}
                 dash={[5, 5]}
                 listening={false}
               />
@@ -1018,7 +2811,7 @@ const Canvas = React.memo(function Canvas({
                 key="rect-start-marker"
                 x={rectangleStartPoint.x * scale}
                 y={rectangleStartPoint.y * scale}
-                radius={getZoomAdjustedSize(6, zoomLevel)}
+                radius={getZoomAdjustedSize(6, renderZoomLevel)}
                 fill={selectedLabelColor}
                 listening={false}
               />
@@ -1047,7 +2840,7 @@ const Canvas = React.memo(function Canvas({
                 key="poly-lines"
                 points={polygonPoints.flatMap(p => [p.x * scale, p.y * scale])}
                 stroke={selectedLabelColor}
-                strokeWidth={getZoomAdjustedSize(ANNOTATION_STROKE_WIDTH, zoomLevel)}
+                strokeWidth={getZoomAdjustedStrokeWidth(ANNOTATION_STROKE_WIDTH, renderZoomLevel)}
                 strokeScaleEnabled={false}
                 strokeOpacity={ANNOTATION_STROKE_OPACITY}
                 dash={[5, 5]}
@@ -1064,7 +2857,7 @@ const Canvas = React.memo(function Canvas({
                     isNearFirstPoint ? polygonPoints[0].y * scale : mousePosition.y * scale,
                   ]}
                   stroke={selectedLabelColor}
-                  strokeWidth={getZoomAdjustedSize(ANNOTATION_STROKE_WIDTH, zoomLevel)}
+                  strokeWidth={getZoomAdjustedStrokeWidth(ANNOTATION_STROKE_WIDTH, renderZoomLevel)}
                   dash={[3, 3]}
                   opacity={0.6}
                   listening={false}
@@ -1076,10 +2869,10 @@ const Canvas = React.memo(function Canvas({
                   key={`temp-poly-point-${idx}`}
                   x={point.x * scale}
                   y={point.y * scale}
-                  radius={getZoomAdjustedSize(idx === 0 && isNearFirstPoint ? 8 : 5, zoomLevel)}
+                  radius={getZoomAdjustedSize(idx === 0 && isNearFirstPoint ? 8 : 5, renderZoomLevel)}
                   fill={idx === 0 && isNearFirstPoint ? '#10b981' : selectedLabelColor}
                   stroke={idx === 0 && isNearFirstPoint ? '#10b981' : undefined}
-                  strokeWidth={idx === 0 && isNearFirstPoint ? getZoomAdjustedSize(2, zoomLevel) : 0}
+                  strokeWidth={idx === 0 && isNearFirstPoint ? getZoomAdjustedSize(2, renderZoomLevel) : 0}
                   listening={false}
                 />
               ))}
@@ -1089,7 +2882,7 @@ const Canvas = React.memo(function Canvas({
                   key="poly-preview-point"
                   x={mousePosition.x * scale}
                   y={mousePosition.y * scale}
-                  radius={getZoomAdjustedSize(4, zoomLevel)}
+                  radius={getZoomAdjustedSize(4, renderZoomLevel)}
                   fill={selectedLabelColor}
                   opacity={0.5}
                   listening={false}
@@ -1106,7 +2899,7 @@ const Canvas = React.memo(function Canvas({
                 key="crosshair-vertical"
                 points={[mousePosition.x * scale, 0, mousePosition.x * scale, dimensions.height]}
                 stroke="white"
-                strokeWidth={getZoomAdjustedSize(1.5, zoomLevel)}
+                strokeWidth={getZoomAdjustedSize(1.5, renderZoomLevel)}
                 dash={[8, 4]}
                 opacity={0.8}
                 listening={false}
@@ -1116,12 +2909,28 @@ const Canvas = React.memo(function Canvas({
                 key="crosshair-horizontal"
                 points={[0, mousePosition.y * scale, dimensions.width, mousePosition.y * scale]}
                 stroke="white"
-                strokeWidth={getZoomAdjustedSize(1.5, zoomLevel)}
+                strokeWidth={getZoomAdjustedSize(1.5, renderZoomLevel)}
                 dash={[8, 4]}
                 opacity={0.8}
                 listening={false}
               />
             </React.Fragment>
+          )}
+
+          {/* Rubber-band selection rectangle */}
+          {rubberBand && (
+            <Rect
+              key="rubber-band-selection"
+              x={Math.min(rubberBand.start.x, rubberBand.end.x) * scale}
+              y={Math.min(rubberBand.start.y, rubberBand.end.y) * scale}
+              width={Math.abs(rubberBand.end.x - rubberBand.start.x) * scale}
+              height={Math.abs(rubberBand.end.y - rubberBand.start.y) * scale}
+              stroke="#3b82f6"
+              strokeWidth={getZoomAdjustedSize(2, renderZoomLevel)}
+              dash={[getZoomAdjustedSize(4, renderZoomLevel), getZoomAdjustedSize(4, renderZoomLevel)]}
+              fill="rgba(59, 130, 246, 0.1)"
+              listening={false}
+            />
           )}
 
           {/* Transformer for selected annotation */}
@@ -1130,6 +2939,14 @@ const Canvas = React.memo(function Canvas({
               key="transformer"
               ref={transformerRef}
               keepRatio={isShiftPressed}
+              rotateEnabled={false}
+              anchorSize={transformerAnchorSize}
+              anchorCornerRadius={transformerAnchorSize / 2}
+              anchorFill={transformerColor}
+              anchorStroke="white"
+              anchorStrokeWidth={transformerAnchorStrokeWidth}
+              borderStroke={transformerColor}
+              borderStrokeWidth={getZoomAdjustedSize(1.5, renderZoomLevel)}
               enabledAnchors={[
                 'top-left',
                 'top-right',
@@ -1143,6 +2960,7 @@ const Canvas = React.memo(function Canvas({
             />
           )}
         </Layer>
+
       </Stage>
 
       {/* Coordinate display - follows cursor */}
@@ -1158,9 +2976,10 @@ const Canvas = React.memo(function Canvas({
         </div>
       )}
 
-      {/* Bounding box coordinates for selected annotation */}
-      {selectedAnnotation && (() => {
-        const annotation = annotations.find(a => a.id === selectedAnnotation)
+      {/* Bounding box coordinates for selected annotations - hide during drag */}
+      {/* Only show coordinates if exactly one annotation is selected */}
+      {selectedIds.length === 1 && draggingAnnotationId !== selectedIds[0] && (() => {
+        const annotation = annotations.find(a => a.id === selectedIds[0])
         if (!annotation) return null
 
         let topLeft: { x: number; y: number } | null = null
@@ -1208,7 +3027,7 @@ const Canvas = React.memo(function Canvas({
         const labelColor = label?.color || '#f97316'
 
         // Account for both scale and zoom level, plus stage position
-        const totalScale = scale * zoomLevel
+        const totalScale = scale * renderZoomLevel
 
         return (
           <React.Fragment key="bbox-coords">
@@ -1218,8 +3037,8 @@ const Canvas = React.memo(function Canvas({
               style={{
                 backgroundColor: labelColor,
                 opacity: 0.95,
-                left: `${offsetX + stagePosition.x + topLeft.x * totalScale - 20}px`,
-                top: `${offsetY + stagePosition.y + topLeft.y * totalScale - 30}px`,
+                left: `${offsetX + renderStagePosition.x + topLeft.x * totalScale - 20}px`,
+                top: `${offsetY + renderStagePosition.y + topLeft.y * totalScale - 30}px`,
               }}
             >
               x1={topLeft.x}, y1={topLeft.y}
@@ -1230,8 +3049,8 @@ const Canvas = React.memo(function Canvas({
               style={{
                 backgroundColor: labelColor,
                 opacity: 0.95,
-                left: `${offsetX + stagePosition.x + bottomRight.x * totalScale + 2}px`,
-                top: `${offsetY + stagePosition.y + bottomRight.y * totalScale + 10}px`,
+                left: `${offsetX + renderStagePosition.x + bottomRight.x * totalScale + 2}px`,
+                top: `${offsetY + renderStagePosition.y + bottomRight.y * totalScale + 10}px`,
               }}
             >
               x2={bottomRight.x}, y2={bottomRight.y}
@@ -1250,6 +3069,97 @@ const Canvas = React.memo(function Canvas({
           )}
         </div>
       )}
+
+      {/* Unsaved changes indicator */}
+      {pendingChanges > 0 && (
+        <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-none">
+          <div
+            className={`px-3 py-2 rounded-lg shadow-lg border-2 flex items-center gap-2 ${
+              hasError
+                ? 'bg-red-500/90 border-red-400 text-white'
+                : 'bg-orange-500/90 border-orange-400 text-white'
+            }`}
+          >
+            {hasError ? (
+              <>
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+                <span className="font-semibold text-sm">Sync Error</span>
+              </>
+            ) : (
+              <>
+                <svg
+                  className="w-5 h-5 animate-pulse"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <span className="font-semibold text-sm">
+                  {pendingChanges} unsaved change{pendingChanges !== 1 ? 's' : ''}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Annotation Hover Tooltip */}
+      {hoverEnabled && hoveredAnnotation && !draggingAnnotationId && (() => {
+        const annotation = annotations.find(a => a.id === hoveredAnnotation.id)
+        if (!annotation) return null
+        return (
+          <AnnotationTooltip
+            annotation={annotation}
+            label={labelMap.get(annotation.labelId)}
+            annotationBounds={hoveredAnnotation.bounds}
+            visible={!draggingAnnotationId}
+            imageWidth={konvaImage?.width || 1}
+            imageHeight={konvaImage?.height || 1}
+            onMouseEnter={handleTooltipMouseEnter}
+            onMouseLeave={handleTooltipMouseLeave}
+          />
+        )
+      })()}
+
+      {/* Annotation Context Menu (Right-click) */}
+      {contextMenuState && (() => {
+        const label = labelMap.get(contextMenuState.annotation.labelId)
+        // Get attribute definitions from the label (if available)
+        // Use attributeDefinitions (frontend) or attributes_schema (backend) for compatibility
+        const attributeDefinitions: LabelAttributeDefinition[] =
+          label?.attributeDefinitions || (label as any)?.attributes_schema || []
+        return (
+          <AnnotationContextMenu
+            annotation={contextMenuState.annotation}
+            label={label}
+            position={contextMenuState.position}
+            onClose={handleCloseContextMenu}
+            onDelete={onDeleteAnnotation}
+            onLabelChange={onLabelChange}
+            onAttributeChange={onUpdateAnnotationAttributes}
+            labels={labels}
+            attributeDefinitions={attributeDefinitions}
+          />
+        )
+      })()}
     </div>
   )
 })

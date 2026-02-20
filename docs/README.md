@@ -1,112 +1,90 @@
-# AnnotateANU Documentation
+<div align="center">
+  <h1>AnnotateANU Documentation</h1>
+  <p>Code-sourced docs organized by topic. Start here, then follow the category that matches your goal.</p>
+  <p>
+    <a href="../README.md"><img alt="Project README" src="https://img.shields.io/badge/project-README-0ea5e9"></a>
+    <a href="development/getting-started.md"><img alt="Getting Started" src="https://img.shields.io/badge/start-getting--started-10b981"></a>
+    <a href="development/api-specs.md"><img alt="API Summary" src="https://img.shields.io/badge/api-summary-1f2937"></a>
+    <a href="architecture/system-overview.mmd"><img alt="System Diagram" src="https://img.shields.io/badge/diagram-system--overview-6366f1"></a>
+  </p>
+</div>
 
-Welcome to the AnnotateANU documentation directory.
+<hr />
 
-## 📁 Directory Structure
+## Docs Map
 
+```mermaid
+flowchart TB
+  nav["Docs Navigation"]
+  nav --> features["Features"]
+  nav --> architecture["Architecture"]
+  nav --> development["Development"]
+  nav --> userguide["User Guide"]
+
+  features --> f1["features/data-management.md"]
+  features --> f2["features/explore-gallery.md"]
+  features --> f3["features/export-workflow.md"]
+  features --> f4["features/quality-metrics-workflow.md"]
+
+  architecture --> a1["architecture/README.md"]
+  architecture --> a2["architecture/annotation-sync.md"]
+  architecture --> a3["architecture/hybrid-canvas.md"]
+  architecture --> a4["architecture/pixi-performance.md"]
+
+  development --> d1["development/getting-started.md"]
+  development --> d2["development/api-specs.md"]
+  development --> d3["development/byom-integration.md"]
+  development --> d4["development/color-theme-guide.md"]
+  development --> d5["development/docs-navigation.mmd"]
+
+  userguide --> u1["user-guide/annotation-workspace.md"]
 ```
-docs/
-├── getting-started.md         # 🆕 Complete guide to running AnnotateANU
-├── architecture/              # System architecture documents
-├── api-specs/                 # API specifications and contracts
-├── byom-integration-guide/    # Bring Your Own Model integration guide
-└── README.md                  # This file
-```
 
-## 📚 Documentation Sections
+Diagram source: `docs/development/docs-navigation.mmd`.
 
-### 🆕 Getting Started Guide (`getting-started.md`)
+## Categories
 
-**Complete guide for new developers!**
-
-Covers:
-- What is Turborepo and why we use it
-- 3 different ways to run the project
-- Complete command reference
-- Development workflows
-- Troubleshooting and best practices
-
-**👉 [Read the Getting Started Guide](./getting-started.md)**
-
----
-
-### Architecture (`architecture/`)
-
-System design documents including:
-- Monorepo structure and organization
-- Service architecture (Solo vs Team mode)
-- Data flow diagrams
-- Database schema design
-- Infrastructure setup
-- Deployment strategies
-
-**Placeholder for future content**
-
-### API Specifications (`api-specs/`)
-
-API documentation including:
-- OpenAPI/Swagger specifications
-- API Core endpoints (user management, projects, datasets, annotations)
-- API Inference endpoints (SAM3 inference, BYOM)
-- WebSocket protocols (real-time sync)
-- Authentication and authorization flows
-
-**Placeholder for future content**
-
-### BYOM Integration Guide (`byom-integration-guide/`)
-
-Guide for integrating custom models:
-- Model registry protocol
-- Inference API contract
-- Deployment options
-- Performance optimization
-- Example implementations
-
-**Placeholder for future content**
-
----
-
-## 🚀 Quick Links
-
-- **[Getting Started Guide](./getting-started.md)** ⭐ **START HERE!**
-- [Main README](../README.md)
-- [CLAUDE.md - AI Development Guide](../CLAUDE.md)
-- [Docker Deployment Modes](../docker/README.md)
-
----
-
-## 📝 Contributing to Documentation
-
-When adding new documentation:
-
-1. **Architecture docs**: Add to `architecture/` directory
-   - Use diagrams (mermaid, plantuml, or images)
-   - Document design decisions and trade-offs
-
-2. **API specs**: Add to `api-specs/` directory
-   - Use OpenAPI 3.0 format
-   - Include request/response examples
-   - Document error codes
-
-3. **Integration guides**: Add to `byom-integration-guide/`
-   - Step-by-step tutorials
-   - Code examples
-   - Troubleshooting sections
-
-4. **Format**: Use Markdown (.md) files
-5. **Images**: Store in `docs/assets/` (create if needed)
-6. **Update this README** when adding new sections
-
----
-
-## 🎯 Documentation Roadmap
-
-- [ ] Architecture decision records (ADRs)
-- [ ] Database schema documentation
-- [ ] API reference (auto-generated from OpenAPI)
-- [ ] BYOM model registry specification
-- [ ] Deployment guide for production
-- [ ] Active learning pipeline documentation
-- [ ] CVAT integration guide
-- [ ] Team mode user guide
-- [ ] Administrator guide
+<table>
+  <tr>
+    <td>
+      <h3>Features</h3>
+      <p>How core features behave and how to use them.</p>
+      <ul>
+        <li><a href="features/data-management.md">Data management and tasks</a></li>
+        <li><a href="features/explore-gallery.md">Explore gallery and filters</a></li>
+        <li><a href="features/export-workflow.md">Export workflow</a></li>
+        <li><a href="features/quality-metrics-workflow.md">Quality metrics workflow</a></li>
+      </ul>
+    </td>
+    <td>
+      <h3>User Guide</h3>
+      <p>Day-to-day workflows inside the UI.</p>
+      <ul>
+        <li><a href="user-guide/annotation-workspace.md">Annotation workspace</a></li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>Architecture</h3>
+      <p>System structure, data flow, and performance notes.</p>
+      <ul>
+        <li><a href="architecture/README.md">Architecture overview</a></li>
+        <li><a href="architecture/annotation-sync.md">Annotation sync (job mode)</a></li>
+        <li><a href="architecture/hybrid-canvas.md">Canvas architecture</a></li>
+        <li><a href="architecture/pixi-performance.md">Pixi experiments</a></li>
+        <li><a href="architecture/database-schema.dbml">Database schema</a></li>
+      </ul>
+    </td>
+    <td>
+      <h3>Development</h3>
+      <p>Setup, configuration, and integration references.</p>
+      <ul>
+        <li><a href="development/getting-started.md">Getting started</a></li>
+        <li><a href="development/api-specs.md">API summary</a></li>
+        <li><a href="development/byom-integration.md">BYOM integration</a></li>
+        <li><a href="development/color-theme-guide.md">Color theme guide</a></li>
+      </ul>
+    </td>
+  </tr>
+</table>

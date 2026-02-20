@@ -1,5 +1,5 @@
 import { Github } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link } from '@tanstack/react-router'
 import { markAsVisited } from '../../lib/navigation'
 
 function Footer() {
@@ -16,7 +16,7 @@ function Footer() {
             Ready to speed up your CV pipeline?
           </h3>
           <Link
-            to="/app"
+            to="/annotation"
             onClick={handleGetStarted}
             className="inline-block px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white text-lg font-semibold rounded-lg transition-colors shadow-lg hover:shadow-xl"
           >

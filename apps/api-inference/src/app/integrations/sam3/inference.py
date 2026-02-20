@@ -108,6 +108,7 @@ class SAM3Inference:
         text_prompt: str,
         threshold: float,
         mask_threshold: float,
+        simplify_tolerance: float = 1.5,
         return_visualization: bool = False,
     ) -> dict:
         """Text-based inference following docs/sam3.md pattern.
@@ -122,6 +123,8 @@ class SAM3Inference:
             Detection threshold
         mask_threshold : float
             Mask threshold
+        simplify_tolerance : float
+            Polygon simplification tolerance
         return_visualization : bool
             Return visualization base64
 
@@ -164,7 +167,7 @@ class SAM3Inference:
         scores_list = scores.cpu().tolist()
 
         # Convert masks to polygon coordinates
-        masks_polygon = masks_to_polygon_data(masks)
+        masks_polygon = masks_to_polygon_data(results["masks"], simplify_tolerance)
 
         processing_time_ms = (time.perf_counter() - start_time) * 1000
 
@@ -200,6 +203,7 @@ class SAM3Inference:
         box_labels: list[int],
         threshold: float,
         mask_threshold: float,
+        simplify_tolerance: float = 1.5,
         return_visualization: bool = False,
     ) -> dict:
         """Bounding box inference following docs/sam3.md pattern.
@@ -216,6 +220,8 @@ class SAM3Inference:
             Detection threshold
         mask_threshold : float
             Mask threshold
+        simplify_tolerance : float
+            Polygon simplification tolerance
         return_visualization : bool
             Return visualization base64
 
@@ -263,7 +269,7 @@ class SAM3Inference:
         scores_list = scores.cpu().tolist()
 
         # Convert masks to polygon coordinates
-        masks_polygon = masks_to_polygon_data(masks)
+        masks_polygon = masks_to_polygon_data(results["masks"], simplify_tolerance)
 
         processing_time_ms = (time.perf_counter() - start_time) * 1000
 
@@ -298,6 +304,7 @@ class SAM3Inference:
         text_prompts: list[str | None],
         threshold: float,
         mask_threshold: float,
+        simplify_tolerance: float = 1.5,
         return_visualizations: bool = False,
     ) -> dict:
         """Batch inference following docs/sam3.md pattern.
@@ -312,6 +319,8 @@ class SAM3Inference:
             Detection threshold
         mask_threshold : float
             Mask threshold
+        simplify_tolerance : float
+            Polygon simplification tolerance
         return_visualizations : bool
             Return visualizations base64
 
@@ -362,7 +371,7 @@ class SAM3Inference:
             scores_list = scores.cpu().tolist()
 
             # Convert masks to polygon coordinates
-            masks_polygon = masks_to_polygon_data(masks)
+            masks_polygon = masks_to_polygon_data(result["masks"], simplify_tolerance)
 
             result_item = {
                 "image_index": idx,

@@ -17,11 +17,11 @@ apps/sam3.pt
 sam3.pt
 
 # Environment variables
-.env
+# .env
 .secret
-apps/api-inference/.env
+# apps/api-inference/.env
 apps/api-inference/.secret
-apps/web/.env
+# apps/web/.env
 
 # IDEs
 .vscode/
@@ -79,6 +79,7 @@ htmlcov/
 *.tmp
 *.temp
 .claude
+.codex
+.agent
 backend/docs
-# Local scripts
-commit-and-push.sh
+node_modules/.vite

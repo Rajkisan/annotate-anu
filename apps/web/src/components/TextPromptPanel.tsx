@@ -1,5 +1,7 @@
-import { sam3Client } from '@/lib/sam3-client'
+import { inferenceClient } from '@/lib/inference-client'
+import { imagesApi } from '@/lib/api-client'
 import type { ImageData, Label, PromptMode } from '@/types/annotations'
+import type { AvailableModel } from '@/types/byom'
 import { Loader2, Sparkles, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
@@ -7,6 +9,44 @@ import { BatchProgressModal, type BatchProgressItem } from './ui/BatchProgressMo
 import { Button } from './ui/button'
 import { ImageSelectorModal } from './ui/ImageSelectorModal'
 import { PromptModeSelector } from './ui/PromptModeSelector'
+
+/**
+ * Fetch image as blob from URL (for job mode images)
+ */
+async function fetchImageAsBlob(url: string): Promise<Blob> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.statusText}`)
+  }
+  return await response.blob()
+}
+
+/**
+ * Get image file from ImageData - handles both local and job mode
+ */
+async function getImageFile(image: ImageData): Promise<File> {
+  let imageBlob: Blob
+
+  if (image.s3Key && image.jobId && image.jobImageId) {
+    // Job mode: fetch image from API
+    const imageUrl = imagesApi.getFullImageUrl(
+      image.s3Key,
+      image.jobId.toString(),
+      image.jobImageId
+    )
+    console.log('[TextPromptPanel] Fetching job image from:', imageUrl)
+    imageBlob = await fetchImageAsBlob(imageUrl)
+  } else if (image.blob && image.blob.size > 0) {
+    // Local mode: use existing blob
+    imageBlob = image.blob
+  } else {
+    throw new Error('No valid image data available')
+  }
+
+  return new File([imageBlob], image.name, {
+    type: imageBlob.type || 'image/jpeg',
+  })
+}
 
 interface TextPromptPanelProps {
   labels: Label[]
@@ -28,6 +68,7 @@ interface TextPromptPanelProps {
   currentAnnotations?: any[] // Add annotations to check if image already has AI annotations
   onLoadingChange?: (loading: boolean) => void // Callback to notify parent of loading state
   onTextPromptChange?: (prompt: string) => void // Callback to notify parent of text prompt changes
+  selectedModel: AvailableModel
 }
 
 type AnnotationType = 'bbox' | 'polygon'
@@ -44,6 +85,7 @@ export function TextPromptPanel({
   currentAnnotations = [],
   onLoadingChange,
   onTextPromptChange,
+  selectedModel,
 }: TextPromptPanelProps) {
   // Load saved prompts per label from localStorage
   const loadLabelPrompts = (): Record<string, string> => {
@@ -60,6 +102,8 @@ export function TextPromptPanel({
   const [labelId, setLabelId] = useState(selectedLabelId || '')
   const [threshold, setThreshold] = useState(0.25)
   const [maskThreshold, setMaskThreshold] = useState(0.25)
+  const [simplifyEnabled, setSimplifyEnabled] = useState(false)
+  const [simplifyTolerance, setSimplifyTolerance] = useState(1.5)
   const [annotationType, setAnnotationType] = useState<AnnotationType>('polygon')
   const [generateBBox, setGenerateBBox] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -186,24 +230,23 @@ export function TextPromptPanel({
       console.log('[AUTO-APPLY] Loading state set to TRUE, dimming overlay should show')
 
       try {
-        // Convert blob to File
-        const imageFile = new File([currentImage.blob], currentImage.name, {
-          type: currentImage.blob.type || 'image/jpeg',
-        })
-        console.log(`[AUTO-APPLY] Image file created: ${imageFile.size} bytes, type: ${imageFile.type}`)
+        // Get image file (handles both local and job mode)
+        const imageFile = await getImageFile(currentImage)
+        console.log(`[AUTO-APPLY] Image file size: ${imageFile.size} bytes`)
 
-        console.log(`[AUTO-APPLY] Calling SAM3 API for "${currentImage.name}"...`)
-        // Call text prompt API
-        const response = await sam3Client.textPrompt({
+        console.log(`[AUTO-APPLY] Calling inference API with ${selectedModel.name} for "${currentImage.name}"...`)
+        // Call text prompt API using unified inference client
+        const result = await inferenceClient.textPrompt(selectedModel, {
           image: imageFile,
           text_prompt: textPrompt,
           threshold,
           mask_threshold: maskThreshold,
+          simplify_tolerance: simplifyEnabled ? simplifyTolerance : 0,
           return_visualization: false,
         })
-        console.log(`[AUTO-APPLY] API response received for "${currentImage.name}":`, response.data)
+        console.log(`[AUTO-APPLY] API response received for "${currentImage.name}":`, result)
 
-        const { num_objects, boxes, masks, scores } = response.data
+        const { num_objects, boxes, masks, scores } = result
 
         // Mark this image as processed
         lastProcessedImageIdRef.current = currentImage.id
@@ -217,10 +260,7 @@ export function TextPromptPanel({
 
         // Use selected annotation type and label
         console.log(`[AUTO-APPLY] Creating ${num_objects} annotations`)
-        await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, createBBoxOverlay: generateBBox })
-
-        // Save the prompt for this label
-        savePromptForLabel(labelId, textPrompt)
+        await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, modelId: selectedModel.id })
 
         toast.success(`Auto-detected ${num_objects} object${num_objects > 1 ? 's' : ''} in "${currentImage.name}"`)
       } catch (error) {
@@ -264,23 +304,23 @@ export function TextPromptPanel({
     console.log(`Manual run triggered for "${currentImage.name}"`)
 
     try {
-      // Convert blob to File
-      const imageFile = new File([currentImage.blob], currentImage.name, {
-        type: currentImage.blob.type,
-      })
+      // Get image file (handles both local and job mode)
+      const imageFile = await getImageFile(currentImage)
+      console.log(`[MANUAL] Image file size: ${imageFile.size} bytes`)
 
-      console.log(`Calling API manually for "${currentImage.name}"...`)
-      // Call text prompt API
-      const response = await sam3Client.textPrompt({
+      console.log(`Calling API manually with ${selectedModel.name} for "${currentImage.name}"...`)
+      // Call text prompt API using unified inference client
+      const result = await inferenceClient.textPrompt(selectedModel, {
         image: imageFile,
         text_prompt: textPrompt,
         threshold,
         mask_threshold: maskThreshold,
+        simplify_tolerance: simplifyEnabled ? simplifyTolerance : 0,
         return_visualization: false,
       })
-      console.log(`Manual API response:`, response.data)
+      console.log(`Manual API response:`, result)
 
-      const { num_objects, boxes, masks, scores } = response.data
+      const { num_objects, boxes, masks, scores } = result
 
       if (num_objects === 0) {
         toast.error('No objects detected. Try adjusting thresholds or prompt.')
@@ -288,7 +328,7 @@ export function TextPromptPanel({
       }
 
       // Use selected annotation type and label
-      await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, createBBoxOverlay: generateBBox })
+      await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, modelId: selectedModel.id })
 
       toast.success(`Successfully detected ${num_objects} object${num_objects > 1 ? 's' : ''}!`)
 
@@ -362,16 +402,17 @@ export function TextPromptPanel({
           type: image.blob.type,
         })
 
-        // Call text prompt API
-        const response = await sam3Client.textPrompt({
+        // Call text prompt API using unified inference client
+        const result = await inferenceClient.textPrompt(selectedModel, {
           image: imageFile,
           text_prompt: textPrompt,
           threshold,
           mask_threshold: maskThreshold,
+          simplify_tolerance: simplifyEnabled ? simplifyTolerance : 0,
           return_visualization: false,
         })
 
-        const { num_objects, boxes, masks, scores } = response.data
+        const { num_objects, boxes, masks, scores } = result
 
         if (num_objects === 0) {
           setBatchProgress(prev => prev.map((item, idx) =>
@@ -379,15 +420,7 @@ export function TextPromptPanel({
           ))
         } else {
           // Use selected annotation type and label - pass imageId for batch processing
-          await onAnnotationsCreated({ 
-            boxes, 
-            masks, 
-            scores, 
-            annotationType, 
-            labelId, 
-            imageId: image.id, 
-            createBBoxOverlay: generateBBox 
-          })
+          await onAnnotationsCreated({ boxes, masks, scores, annotationType, labelId, imageId: image.id, modelId: selectedModel.id })
 
           setBatchProgress(prev => prev.map((item, idx) =>
             idx === i ? { ...item, status: 'success', count: num_objects } : item
@@ -616,6 +649,54 @@ export function TextPromptPanel({
             <p className="mt-1 text-xs text-gray-600">
               Controls segmentation mask precision
             </p>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label htmlFor="simplifyTolerance" className="block text-sm font-medium text-gray-700">
+                Polygon Simplification{simplifyEnabled ? `: ${simplifyTolerance.toFixed(1)}` : ''}
+              </label>
+              <button
+                type="button"
+                onClick={() => setSimplifyEnabled(!simplifyEnabled)}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  simplifyEnabled ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+                disabled={isLoading}
+              >
+                <span
+                  className={`absolute h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-all duration-200 ${
+                    simplifyEnabled ? 'left-[18px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            {simplifyEnabled && (
+              <>
+                <input
+                  type="range"
+                  id="simplifyTolerance"
+                  min="0.1"
+                  max="10"
+                  step="0.1"
+                  value={simplifyTolerance}
+                  onChange={(e) => setSimplifyTolerance(parseFloat(e.target.value))}
+                  className="w-full slider-purple"
+                  style={{
+                    background: `linear-gradient(to right, rgb(147, 51, 234) 0%, rgb(147, 51, 234) ${((simplifyTolerance - 0.1) / 9.9) * 100}%, rgb(209, 213, 219) ${((simplifyTolerance - 0.1) / 9.9) * 100}%, rgb(209, 213, 219) 100%)`
+                  }}
+                  disabled={isLoading}
+                />
+                <p className="mt-1 text-xs text-gray-600">
+                  Reduces polygon points (higher = simpler polygons)
+                </p>
+              </>
+            )}
+            {!simplifyEnabled && (
+              <p className="text-xs text-gray-500">
+                Disabled - polygons will have full detail
+              </p>
+            )}
           </div>
         </div>
       </form>
